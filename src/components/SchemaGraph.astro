@@ -56,13 +56,18 @@ const authorId = primary.id;
 const personEntity = primary.entity;
 const additional = (site.additionalAuthors ?? []).map(personFor);
 
+const orgType = site.additionalEntityTypes?.length
+  ? [site.entityType, ...site.additionalEntityTypes]
+  : site.entityType;
+
 const orgEntity: Record<string, unknown> = {
-  "@type": site.entityType,
+  "@type": orgType,
   "@id": orgId,
   "name": site.name,
   ...(site.alternateNames?.length ? { alternateName: site.alternateNames } : {}),
   "legalName": site.legalName,
   "url": siteUrl,
+  ...(site.logoUrl ? { logo: site.logoUrl.startsWith('http') ? site.logoUrl : `${siteUrl}${site.logoUrl}` } : {}),
   "description": site.description,
   ...(site.disambiguatingDescription ? { disambiguatingDescription: site.disambiguatingDescription } : {}),
   ...(site.foundingDate ? { foundingDate: site.foundingDate } : {}),
@@ -75,6 +80,25 @@ const orgEntity: Record<string, unknown> = {
       ...(site.address.region ? { addressRegion: site.address.region } : {}),
       ...(site.address.postalCode ? { postalCode: site.address.postalCode } : {}),
       "addressCountry": site.address.countryCode || "GB",
+    }
+  } : {}),
+  ...(site.contactPoint ? {
+    contactPoint: {
+      "@type": "ContactPoint",
+      contactType: site.contactPoint.contactType,
+      ...(site.contactPoint.email ? { email: site.contactPoint.email } : {}),
+      ...(site.contactPoint.telephone ? { telephone: site.contactPoint.telephone } : {}),
+      ...(site.contactPoint.url ? { url: site.contactPoint.url } : {}),
+      ...(site.contactPoint.availableLanguage ? { availableLanguage: site.contactPoint.availableLanguage } : {}),
+    }
+  } : {}),
+  ...(site.priceRange ? { priceRange: site.priceRange } : {}),
+  ...(site.openingHours ? {
+    openingHoursSpecification: {
+      "@type": "OpeningHoursSpecification",
+      dayOfWeek: site.openingHours.dayOfWeek,
+      opens: site.openingHours.opens,
+      closes: site.openingHours.closes,
     }
   } : {}),
   "founder": { "@id": authorId },

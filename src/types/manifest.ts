@@ -49,6 +49,20 @@ export interface CredibilityConfig {
   bullets?: string[];
 }
 
+export interface ContactPointConfig {
+  contactType: string;
+  email?: string;
+  telephone?: string;
+  url?: string;
+  availableLanguage?: string;
+}
+
+export interface OpeningHoursConfig {
+  dayOfWeek: string[];
+  opens: string;
+  closes: string;
+}
+
 export interface SiteConfig {
   domain: string;
   siteUrl: string;
@@ -60,6 +74,14 @@ export interface SiteConfig {
   disambiguatingDescription?: string;
 
   entityType: "Organization" | "Person" | "LocalBusiness";
+  /** Additional schema.org types to combine with entityType. Use for sites
+   *  whose Organization is also a LocalBusiness + ProfessionalService etc. */
+  additionalEntityTypes?: string[];
+  /** Logo URL, absolute or site-relative (resolved against siteUrl). */
+  logoUrl?: string;
+  contactPoint?: ContactPointConfig;
+  priceRange?: string;
+  openingHours?: OpeningHoursConfig;
   foundingDate?: string;
 
   author: AuthorConfig;

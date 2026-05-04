@@ -1,6 +1,6 @@
 {
   "name": "@rank4ai/fleet-core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Shared baseline components, layouts, types and templates for the Rank4AI fleet (main, owned, leadgen, client and idea-tier sites).",
   "type": "module",
   "private": true,
