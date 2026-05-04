@@ -31,6 +31,7 @@ export interface AuthorConfig {
   bylineLink?: string;
   knowsAbout?: string[];
   sameAs?: string[];
+  email?: string;
 }
 
 export interface AddressConfig {
@@ -62,6 +63,11 @@ export interface SiteConfig {
   foundingDate?: string;
 
   author: AuthorConfig;
+  /** Optional additional people (co-founders, named contributors). The primary
+   *  author is the founder; additional authors are emitted as Person entities
+   *  in the @graph alongside the primary, all linked to the Organization via
+   *  worksFor. Use for multi-founder sites like Rank4AI. */
+  additionalAuthors?: AuthorConfig[];
   address?: AddressConfig;
 
   topic: string;

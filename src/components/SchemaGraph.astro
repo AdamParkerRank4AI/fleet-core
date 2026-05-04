@@ -32,20 +32,29 @@ const {
 
 const siteUrl = site.siteUrl.replace(/\/$/, '');
 const pageUrl = new URL(Astro.url.pathname, siteUrl).href;
-const authorSlug = site.author.name.toLowerCase().replace(/\s+/g, '-');
-const authorId = `${siteUrl}/#${authorSlug}`;
 const orgId = `${siteUrl}/#organization`;
 const websiteId = `${siteUrl}/#website`;
 
-const personEntity: Record<string, unknown> = {
-  "@type": "Person",
-  "@id": authorId,
-  "name": site.author.name,
-  "jobTitle": site.author.role,
-  "worksFor": { "@id": orgId },
-  ...(site.author.knowsAbout?.length ? { knowsAbout: site.author.knowsAbout } : {}),
-  ...(site.author.sameAs?.length ? { sameAs: site.author.sameAs } : {}),
-};
+function personFor(a: typeof site.author): { entity: Record<string, unknown>; id: string } {
+  const slug = a.name.toLowerCase().replace(/\s+/g, '-');
+  const id = `${siteUrl}/#${slug}`;
+  const entity: Record<string, unknown> = {
+    "@type": "Person",
+    "@id": id,
+    "name": a.name,
+    "jobTitle": a.role,
+    "worksFor": { "@id": orgId },
+    ...(a.knowsAbout?.length ? { knowsAbout: a.knowsAbout } : {}),
+    ...(a.sameAs?.length ? { sameAs: a.sameAs } : {}),
+    ...(a.email ? { email: a.email } : {}),
+  };
+  return { entity, id };
+}
+
+const primary = personFor(site.author);
+const authorId = primary.id;
+const personEntity = primary.entity;
+const additional = (site.additionalAuthors ?? []).map(personFor);
 
 const orgEntity: Record<string, unknown> = {
   "@type": site.entityType,
@@ -93,6 +102,7 @@ const webpageEntity: Record<string, unknown> = {
 
 const graph: Record<string, unknown>[] = [
   personEntity,
+  ...additional.map(a => a.entity),
   orgEntity,
   websiteEntity,
   webpageEntity,
