@@ -1,0 +1,125 @@
+---
+// CopyForAI: one-click button that copies the article as plain Markdown,
+// so users can paste into ChatGPT, Claude, Gemini, Perplexity etc. for summary or Q&A.
+// Domain-agnostic. No site coupling.
+---
+
+<div class="copy-for-ai my-6 flex items-center gap-3 hidden" data-ai-exclude="true">
+  <button
+    type="button"
+    class="copy-for-ai-btn inline-flex items-center gap-2 px-4 py-2 rounded-full border border-brand/20 bg-white text-brand text-sm font-semibold hover:bg-brand hover:text-white transition-colors"
+    aria-label="Copy this page as Markdown for ChatGPT, Claude, or other AI tools"
+  >
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    </svg>
+    <span class="copy-for-ai-label">Copy for AI</span>
+  </button>
+  <span class="copy-for-ai-hint text-xs text-gray-500 hidden sm:inline">Paste into ChatGPT, Claude, Gemini or Perplexity</span>
+</div>
+
+<script is:inline>
+(function(){
+  function htmlToMarkdown(root){
+    var out = [];
+    function walk(node, listDepth){
+      listDepth = listDepth || 0;
+      node.childNodes.forEach(function(child){
+        if (child.nodeType === 3) {
+          out.push(child.nodeValue.replace(/\s+/g,' '));
+          return;
+        }
+        if (child.nodeType !== 1) return;
+        var el = child;
+        var tag = el.tagName.toLowerCase();
+        if (el.dataset && el.dataset.aiExclude === 'true') return;
+        if (['script','style','noscript','button','form','input','textarea','select','nav','aside'].indexOf(tag) !== -1) return;
+        if (el.classList && (el.classList.contains('copy-for-ai') || el.classList.contains('floating-cta') || el.classList.contains('lead-form'))) return;
+
+        if (tag === 'h1') { out.push('\n\n# '); walk(el,listDepth); out.push('\n'); return; }
+        if (tag === 'h2') { out.push('\n\n## '); walk(el,listDepth); out.push('\n'); return; }
+        if (tag === 'h3') { out.push('\n\n### '); walk(el,listDepth); out.push('\n'); return; }
+        if (tag === 'h4') { out.push('\n\n#### '); walk(el,listDepth); out.push('\n'); return; }
+        if (tag === 'p')  { out.push('\n\n'); walk(el,listDepth); out.push('\n'); return; }
+        if (tag === 'br') { out.push('\n'); return; }
+        if (tag === 'strong' || tag === 'b') { out.push('**'); walk(el,listDepth); out.push('**'); return; }
+        if (tag === 'em' || tag === 'i') { out.push('*'); walk(el,listDepth); out.push('*'); return; }
+        if (tag === 'code') { out.push('`'); walk(el,listDepth); out.push('`'); return; }
+        if (tag === 'pre') { out.push('\n\n```\n'); out.push(el.textContent || ''); out.push('\n```\n'); return; }
+        if (tag === 'a')  {
+          var href = el.getAttribute('href') || '';
+          if (href.indexOf('#') === 0) { walk(el,listDepth); return; }
+          try { href = new URL(href, window.location.href).href; } catch(e) {}
+          out.push('['); walk(el,listDepth); out.push('](' + href + ')');
+          return;
+        }
+        if (tag === 'ul' || tag === 'ol') {
+          out.push('\n');
+          var i = 0;
+          el.childNodes.forEach(function(li){
+            if (li.nodeType === 1 && li.tagName.toLowerCase() === 'li') {
+              i++;
+              var pad = '';
+              for (var d=0; d<listDepth; d++) pad += '  ';
+              out.push('\n' + pad + (tag === 'ol' ? (i + '. ') : '- '));
+              walk(li, listDepth + 1);
+            }
+          });
+          out.push('\n');
+          return;
+        }
+        if (tag === 'table') {
+          out.push('\n\n');
+          var rows = el.querySelectorAll('tr');
+          rows.forEach(function(tr, idx){
+            var cells = tr.querySelectorAll('th,td');
+            var row = [];
+            cells.forEach(function(c){ row.push((c.textContent||'').trim().replace(/\|/g,'\\|')); });
+            out.push('| ' + row.join(' | ') + ' |\n');
+            if (idx === 0) out.push('|' + row.map(function(){return ' --- ';}).join('|') + '|\n');
+          });
+          out.push('\n');
+          return;
+        }
+        walk(el, listDepth);
+      });
+    }
+    walk(root, 0);
+    return out.join('')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  var hasArticle = !!document.querySelector('article');
+  if (hasArticle) {
+    document.querySelectorAll('.copy-for-ai').forEach(function(wrap){ wrap.classList.remove('hidden'); });
+  }
+
+  document.querySelectorAll('.copy-for-ai-btn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var article = document.querySelector('article') || document.querySelector('main') || document.body;
+      var md = htmlToMarkdown(article);
+      var header = '# ' + (document.title || document.location.pathname) + '\n\n' +
+                   'Source: ' + document.location.href + '\n' +
+                   'Retrieved: ' + new Date().toISOString().slice(0,10) + '\n\n---\n';
+      var payload = header + md;
+      var label = btn.querySelector('.copy-for-ai-label');
+      var original = label ? label.textContent : 'Copy for AI';
+      function done(ok){
+        if (!label) return;
+        label.textContent = ok ? 'Copied' : 'Copy failed';
+        setTimeout(function(){ label.textContent = original; }, 2000);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(payload).then(function(){ done(true); }, function(){ done(false); });
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = payload; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); done(true); } catch(e) { done(false); }
+        document.body.removeChild(ta);
+      }
+    });
+  });
+})();
+</script>

@@ -1,0 +1,98 @@
+---
+/**
+ * Fleet-core BaseLayout: the head + skeleton wrapper. Site-specific
+ * chrome (header, footer, brand ticker, floating CTA) goes in named
+ * slots so each site can plug its own.
+ *
+ * Owns: title, meta, OG, Twitter, canonical, robots, schema graph,
+ * skip-link, body wrapper, main landmark.
+ *
+ * Site supplies: <Header slot="header" />, <Footer slot="footer" />,
+ * any analytics scripts, any extra <head> nodes via the `head` slot.
+ */
+
+import type { SiteConfig } from "../types/manifest";
+import SchemaGraph from "../components/SchemaGraph.astro";
+
+interface Props {
+  site: SiteConfig;
+  title: string;
+  description: string;
+  canonical?: string;
+  dateModified?: string;
+  ogImage?: string;
+  schemaExtra?: Record<string, unknown>[];
+  preLaunch?: boolean;
+}
+
+const {
+  site,
+  title,
+  description,
+  canonical,
+  dateModified = site.defaultDateModified || new Date().toISOString().slice(0, 10),
+  ogImage,
+  schemaExtra,
+  preLaunch = false,
+} = Astro.props;
+
+const siteUrl = site.siteUrl.replace(/\/$/, '');
+const pageUrl = canonical || new URL(Astro.url.pathname, siteUrl).href;
+const robotsValue = preLaunch
+  ? "noindex, nofollow"
+  : "index, follow, max-snippet:-1, max-image-preview:large";
+const locale = site.defaultLocale || "en-GB";
+---
+
+<!DOCTYPE html>
+<html lang={locale}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" />
+
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={pageUrl} />
+
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={pageUrl} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={site.name} />
+    {ogImage && <meta property="og:image" content={ogImage} />}
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    {ogImage && <meta name="twitter:image" content={ogImage} />}
+
+    <meta name="robots" content={robotsValue} />
+
+    <SchemaGraph
+      site={site}
+      title={title}
+      description={description}
+      dateModified={dateModified}
+      extra={schemaExtra}
+    />
+
+    <slot name="head" />
+  </head>
+  <body class="bg-white text-gray-900 font-sans antialiased">
+    <a
+      href="#main-content"
+      class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[200] focus:bg-brand focus:text-white focus:px-4 focus:py-2 focus:rounded-lg focus:text-sm"
+    >Skip to main content</a>
+
+    <slot name="header" />
+
+    <main id="main-content" role="main">
+      <slot />
+    </main>
+
+    <slot name="footer" />
+    <slot name="after-footer" />
+  </body>
+</html>

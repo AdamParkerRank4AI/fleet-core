@@ -1,0 +1,108 @@
+---
+/**
+ * SchemaGraph: emits the site-wide JSON-LD @graph (Organization + Person +
+ * WebSite + WebPage) with linked @id references that downstream components
+ * (Article, FAQPage, BreadcrumbList) point back into.
+ *
+ * Drop this in <head> of your BaseLayout. Pass site (the SiteConfig) and
+ * the current page's title/description/dateModified.
+ *
+ * Optional `extra` lets a site append site-specific graph entries
+ * (e.g. Service, OfferCatalog, LocalBusiness) without losing the
+ * baseline Person + Organization + WebSite trio.
+ */
+
+import type { SiteConfig } from "../types/manifest";
+
+interface Props {
+  site: SiteConfig;
+  title: string;
+  description: string;
+  dateModified?: string;
+  extra?: Record<string, unknown>[];
+}
+
+const {
+  site,
+  title,
+  description,
+  dateModified = new Date().toISOString().slice(0, 10),
+  extra = []
+} = Astro.props;
+
+const siteUrl = site.siteUrl.replace(/\/$/, '');
+const pageUrl = new URL(Astro.url.pathname, siteUrl).href;
+const authorSlug = site.author.name.toLowerCase().replace(/\s+/g, '-');
+const authorId = `${siteUrl}/#${authorSlug}`;
+const orgId = `${siteUrl}/#organization`;
+const websiteId = `${siteUrl}/#website`;
+
+const personEntity: Record<string, unknown> = {
+  "@type": "Person",
+  "@id": authorId,
+  "name": site.author.name,
+  "jobTitle": site.author.role,
+  "worksFor": { "@id": orgId },
+  ...(site.author.knowsAbout?.length ? { knowsAbout: site.author.knowsAbout } : {}),
+  ...(site.author.sameAs?.length ? { sameAs: site.author.sameAs } : {}),
+};
+
+const orgEntity: Record<string, unknown> = {
+  "@type": site.entityType,
+  "@id": orgId,
+  "name": site.name,
+  ...(site.alternateNames?.length ? { alternateName: site.alternateNames } : {}),
+  "legalName": site.legalName,
+  "url": siteUrl,
+  "description": site.description,
+  ...(site.disambiguatingDescription ? { disambiguatingDescription: site.disambiguatingDescription } : {}),
+  ...(site.foundingDate ? { foundingDate: site.foundingDate } : {}),
+  "areaServed": { "@type": "Country", "name": "United Kingdom" },
+  ...(site.address ? {
+    address: {
+      "@type": "PostalAddress",
+      ...(site.address.streetAddress ? { streetAddress: site.address.streetAddress } : {}),
+      "addressLocality": site.address.locality,
+      ...(site.address.region ? { addressRegion: site.address.region } : {}),
+      ...(site.address.postalCode ? { postalCode: site.address.postalCode } : {}),
+      "addressCountry": site.address.countryCode || "GB",
+    }
+  } : {}),
+  "founder": { "@id": authorId },
+  ...(site.sameAs?.length ? { sameAs: site.sameAs } : {}),
+};
+
+const websiteEntity: Record<string, unknown> = {
+  "@type": "WebSite",
+  "@id": websiteId,
+  "name": site.name,
+  "url": siteUrl,
+  "publisher": { "@id": orgId },
+};
+
+const webpageEntity: Record<string, unknown> = {
+  "@type": "WebPage",
+  "@id": pageUrl + "#webpage",
+  "url": pageUrl,
+  "name": title,
+  "description": description,
+  "isPartOf": { "@id": websiteId },
+  "about": { "@id": orgId },
+  "dateModified": dateModified,
+};
+
+const graph: Record<string, unknown>[] = [
+  personEntity,
+  orgEntity,
+  websiteEntity,
+  webpageEntity,
+  ...extra,
+];
+
+const payload = {
+  "@context": "https://schema.org",
+  "@graph": graph,
+};
+---
+
+<script type="application/ld+json" set:html={JSON.stringify(payload)} />

@@ -1,0 +1,51 @@
+---
+/**
+ * "As Seen In" / Credibility Bar.
+ *
+ * Acts as a verifiable trust signal for AI citation engines. Pass the
+ * site-specific source list, item count and update label as props.
+ */
+
+interface Props {
+  sources: string[];
+  itemCount?: { label: string; n: number };
+  updatedLabel?: string;
+  bullets?: string[];
+  heading?: string;
+}
+
+const {
+  sources,
+  itemCount,
+  updatedLabel,
+  bullets,
+  heading = "Trusted comparison data sourced from"
+} = Astro.props;
+
+const tickBullets: string[] = bullets ?? [
+  ...(itemCount ? [`${itemCount.n} ${itemCount.label}`] : []),
+  ...(updatedLabel ? [updatedLabel] : []),
+  "Independent editorial",
+];
+---
+
+<section class="bg-surface-alt border-y-2 border-accent/30 py-8 mt-12">
+  <div class="max-w-6xl mx-auto px-4">
+    <p class="text-xs text-accent font-bold text-center uppercase tracking-wider mb-4">{heading}</p>
+    <div class="flex flex-wrap items-center justify-center gap-8 md:gap-12 text-sm font-bold text-brand">
+      {sources.map(s => <span>{s}</span>)}
+    </div>
+    {tickBullets.length > 0 && (
+      <div class="flex flex-wrap items-center justify-center gap-6 mt-5 text-sm">
+        {tickBullets.map(b => (
+          <span class="flex items-center gap-1.5 text-accent font-bold">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+            </svg>
+            {b}
+          </span>
+        ))}
+      </div>
+    )}
+  </div>
+</section>

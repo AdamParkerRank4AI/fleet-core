@@ -1,0 +1,65 @@
+---
+/**
+ * Speakable Schema Component.
+ *
+ * Adds Article schema with SpeakableSpecification + linked @id references
+ * back to the site-wide Organization + Person + WebSite graph that
+ * SchemaGraph.astro emits.
+ *
+ * Speakable adoption is under 10% globally. Sites that ship it see a
+ * meaningful lift in AI search referrals.
+ */
+
+import type { SiteConfig } from "../types/manifest";
+
+interface Props {
+  title: string;
+  description: string;
+  site: SiteConfig;
+  datePublished?: string;
+  dateModified?: string;
+  url?: string;
+  cssSelectors?: string[];
+}
+
+const {
+  title,
+  description,
+  site,
+  datePublished,
+  dateModified = new Date().toISOString().slice(0, 10),
+  url,
+  cssSelectors = [".answer-capsule", ".key-takeaway"]
+} = Astro.props;
+
+const siteUrl = site.siteUrl.replace(/\/$/, '');
+const pageUrl = url || new URL(Astro.url.pathname, siteUrl).href;
+const authorId = `${siteUrl}/#${site.author.name.toLowerCase().replace(/\s+/g, '-')}`;
+
+const articleSchema: Record<string, unknown> = {
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "@id": pageUrl + "#article",
+  "headline": title,
+  "description": description,
+  "dateModified": dateModified,
+  "url": pageUrl,
+  "isPartOf": { "@id": siteUrl + "/#website" },
+  "author": {
+    "@type": "Person",
+    "@id": authorId,
+    "name": site.author.name,
+    "jobTitle": site.author.role,
+    "description": site.author.bio
+  },
+  "publisher": { "@id": siteUrl + "/#organization" },
+  "speakable": {
+    "@type": "SpeakableSpecification",
+    "cssSelector": cssSelectors
+  }
+};
+
+if (datePublished) articleSchema.datePublished = datePublished;
+---
+
+<script type="application/ld+json" set:html={JSON.stringify(articleSchema)} />

@@ -1,0 +1,47 @@
+---
+/**
+ * Breadcrumbs with BreadcrumbList schema.
+ *
+ * siteUrl is taken from Astro.site (set in astro.config.mjs as `site:`).
+ * Falls back to the current page origin if not configured.
+ */
+
+interface Crumb {
+  label: string;
+  href?: string;
+}
+
+interface Props {
+  items: Crumb[];
+  siteUrl?: string;
+}
+
+const { items, siteUrl: siteUrlProp } = Astro.props;
+const siteUrl = (siteUrlProp || Astro.site?.toString() || Astro.url.origin).replace(/\/$/, '');
+
+const breadcrumbSchema = {
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": items.map((item, i) => ({
+    "@type": "ListItem",
+    "position": i + 1,
+    "name": item.label,
+    ...(item.href ? { "item": `${siteUrl}${item.href}` } : {})
+  }))
+};
+---
+
+<script type="application/ld+json" set:html={JSON.stringify(breadcrumbSchema)} />
+
+<nav aria-label="Breadcrumb" class="text-sm text-gray-500 mb-6">
+  {items.map((item, i) => (
+    <>
+      {i > 0 && <span class="mx-1">&rsaquo;</span>}
+      {item.href ? (
+        <a href={item.href} class="hover:text-brand transition-colors">{item.label}</a>
+      ) : (
+        <span class="text-gray-700">{item.label}</span>
+      )}
+    </>
+  ))}
+</nav>

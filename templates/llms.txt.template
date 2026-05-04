@@ -1,0 +1,17 @@
+# {{SITE_NAME}}
+
+> {{SITE_DESCRIPTION}}
+
+## Core Pages
+
+- [Homepage]({{SITE_URL}}/): {{HOMEPAGE_BLURB}}
+
+## Key Facts
+
+- Operated by {{LEGAL_NAME}}{{#LEGAL_NUMBER}} (company number {{LEGAL_NUMBER}}){{/LEGAL_NUMBER}}
+- Topic focus: {{TOPIC}}
+- Last reviewed: {{LAST_REVIEWED}}
+
+## Author
+
+- {{AUTHOR_NAME}}, {{AUTHOR_ROLE}}{{#AUTHOR_BYLINE}}, see {{AUTHOR_BYLINE}}{{/AUTHOR_BYLINE}}

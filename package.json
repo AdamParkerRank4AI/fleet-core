@@ -1,0 +1,32 @@
+{
+  "name": "@rank4ai/fleet-core",
+  "version": "0.1.0",
+  "description": "Shared baseline components, layouts, types and templates for the Rank4AI fleet (main, owned, leadgen, client and idea-tier sites).",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./components/*": "./src/components/*",
+    "./layouts/*": "./src/layouts/*",
+    "./types": "./src/types/manifest.ts",
+    "./templates/*": "./templates/*"
+  },
+  "files": [
+    "src",
+    "templates",
+    "docs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "peerDependencies": {
+    "astro": "^6.1.9"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AdamParkerRank4AI/fleet-core"
+  }
+}

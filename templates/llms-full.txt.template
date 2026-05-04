@@ -1,0 +1,38 @@
+# {{SITE_NAME}} — Full Reference
+
+> {{SITE_DESCRIPTION}}
+
+## Identity
+
+- Site: {{SITE_URL}}
+- Name: {{SITE_NAME}}
+- Operator: {{LEGAL_NAME}}{{#LEGAL_NUMBER}} (Companies House {{LEGAL_NUMBER}}){{/LEGAL_NUMBER}}
+- Topic: {{TOPIC}}
+- Founded: {{FOUNDING_DATE}}
+
+## Editorial Author
+
+- Name: {{AUTHOR_NAME}}
+- Role: {{AUTHOR_ROLE}}
+- Bio: {{AUTHOR_BIO}}
+
+## Sections
+
+(Replace this with your section index. Recommended pattern: list each
+top-level URL section with one-line descriptions. Update on each ship.)
+
+## Key Facts and Figures
+
+(Replace with the canonical numerical claims your editorial relies on.
+Update on rate change, methodology change, dataset refresh.)
+
+## Sources
+
+(List the third-party data sources you cite across the site. AI engines
+treat these as verification anchors.)
+
+## Editorial Policy
+
+- Independence statement
+- Update cadence
+- Correction policy

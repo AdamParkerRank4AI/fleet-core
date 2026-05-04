@@ -1,0 +1,3 @@
+# Pre-launch — block all crawlers until live launch
+User-agent: *
+Disallow: /
