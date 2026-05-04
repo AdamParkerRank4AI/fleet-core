@@ -1,0 +1,80 @@
+---
+/**
+ * PostcodeLookup: lightweight UK postcode resolver using postcodes.io
+ * (free, no auth, unlimited).
+ *
+ * Use case: gate CTAs by postcode region, route applicants to the right
+ * partner, or auto-fill address fields. Resolves to district / region /
+ * country plus latitude / longitude for downstream geocoding.
+ *
+ * Pass `onResultSelector` to nominate the DOM element to update; pass
+ * `redirectUrlTemplate` (with `{postcode}` token) to redirect on success.
+ */
+
+interface Props {
+  onResultSelector?: string;
+  redirectUrlTemplate?: string;
+  placeholder?: string;
+  buttonLabel?: string;
+}
+
+const {
+  onResultSelector = '#postcode-result',
+  redirectUrlTemplate,
+  placeholder = 'Enter UK postcode (e.g. CO9 4EB)',
+  buttonLabel = 'Check',
+} = Astro.props;
+---
+
+<div class="postcode-lookup flex gap-2">
+  <input
+    type="text"
+    class="postcode-input flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm uppercase"
+    placeholder={placeholder}
+    autocomplete="postal-code"
+    data-redirect={redirectUrlTemplate ?? ''}
+    data-target={onResultSelector}
+  />
+  <button
+    type="button"
+    class="postcode-btn bg-brand text-white px-5 py-2 rounded-lg text-sm font-bold hover:shadow-lg transition"
+  >{buttonLabel}</button>
+</div>
+
+<script is:inline>
+(function(){
+  function clean(p){ return (p || '').toUpperCase().replace(/\s+/g, ' ').trim(); }
+  document.querySelectorAll('.postcode-lookup').forEach(function(wrap){
+    var input = wrap.querySelector('.postcode-input');
+    var btn = wrap.querySelector('.postcode-btn');
+    var redirect = input.dataset.redirect || '';
+    var targetSelector = input.dataset.target || '';
+    function lookup(){
+      var p = clean(input.value);
+      if (!p) return;
+      var url = 'https://api.postcodes.io/postcodes/' + encodeURIComponent(p);
+      fetch(url).then(function(r){ return r.json(); }).then(function(j){
+        if (j.status !== 200) {
+          input.classList.add('border-red-400');
+          return;
+        }
+        input.classList.remove('border-red-400');
+        if (redirect) {
+          window.location.href = redirect.replace(/\{postcode\}/g, p.replace(/\s+/g, '-').toLowerCase());
+          return;
+        }
+        var target = targetSelector && document.querySelector(targetSelector);
+        if (target) {
+          target.innerHTML = '<p class="text-sm text-gray-700">' +
+            '<strong>' + j.result.postcode + '</strong>: ' +
+            j.result.admin_district + ', ' + j.result.region +
+            ' (' + j.result.country + ')</p>';
+        }
+        wrap.dispatchEvent(new CustomEvent('postcode-resolved', { detail: j.result }));
+      });
+    }
+    btn.addEventListener('click', lookup);
+    input.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); lookup(); }});
+  });
+})();
+</script>

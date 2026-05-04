@@ -1,0 +1,56 @@
+---
+/**
+ * ReviewWidget: Trustpilot business widget wrapper.
+ *
+ * Renders the Trustpilot mini-widget for a given business unit ID.
+ * Falls back to a placeholder when the ID is missing (graceful degrade
+ * for sites that have not yet enrolled in Trustpilot Business).
+ *
+ * Pass `businessUnitId` (e.g. "5XYZ..." from your Trustpilot dashboard).
+ * Optional `sku` adds product-level review association.
+ */
+
+interface Props {
+  businessUnitId?: string;
+  domain?: string;
+  variant?: 'mini' | 'micro' | 'compact';
+  theme?: 'light' | 'dark';
+  sku?: string;
+}
+
+const {
+  businessUnitId,
+  domain,
+  variant = 'mini',
+  theme = 'light',
+  sku,
+} = Astro.props;
+
+const widgetTemplateId = {
+  mini: '53aa8807dec7e10d38f59f32',
+  micro: '5419b6a8b0d04a076446a9ad',
+  compact: '5419b637fa0340045cd0c936',
+}[variant];
+
+const heightByVariant = { mini: 150, micro: 24, compact: 110 }[variant];
+---
+
+{businessUnitId ? (
+  <div
+    class="trustpilot-widget"
+    data-locale="en-GB"
+    data-template-id={widgetTemplateId}
+    data-businessunit-id={businessUnitId}
+    data-style-height={`${heightByVariant}px`}
+    data-style-width="100%"
+    data-theme={theme}
+    data-sku={sku ?? ''}
+  >
+    {domain && (
+      <a href={`https://uk.trustpilot.com/review/${domain}`} target="_blank" rel="noopener nofollow">Trustpilot</a>
+    )}
+  </div>
+  <script async type="text/partytown" src="https://widget.trustpilot.com/bootstrap/v5/tp.widget.bootstrap.min.js"></script>
+) : (
+  <p class="text-xs text-gray-400 italic">Trustpilot widget configured but no business unit ID set in manifest.</p>
+)}

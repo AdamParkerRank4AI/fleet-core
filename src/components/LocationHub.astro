@@ -1,0 +1,84 @@
+---
+/**
+ * LocationHub: Mapbox UK map with city pins linked to per-city pages.
+ *
+ * Pass `cities` (an array of {name, slug, lat, lng, blurb?}) and
+ * `mapboxToken`. The map renders as an interactive UK map with pinned
+ * cities; clicking a pin links to the city page (constructed from
+ * `cityPathPrefix` + slug).
+ *
+ * Falls back to a static city list if mapboxToken is missing.
+ */
+
+interface City {
+  name: string;
+  slug: string;
+  lat: number;
+  lng: number;
+  blurb?: string;
+}
+
+interface Props {
+  cities: City[];
+  mapboxToken?: string;
+  cityPathPrefix?: string;
+  height?: string;
+}
+
+const {
+  cities,
+  mapboxToken,
+  cityPathPrefix = '/city/',
+  height = '500px',
+} = Astro.props;
+---
+
+{mapboxToken ? (
+  <>
+    <div id="location-hub-map" data-token={mapboxToken} data-prefix={cityPathPrefix} style={`height:${height};`} class="w-full rounded-xl border border-gray-200"></div>
+    <script type="application/json" id="location-hub-cities" set:html={JSON.stringify(cities)}></script>
+    <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" />
+    <script is:inline>
+    (function(){
+      var script = document.createElement('script');
+      script.src = 'https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js';
+      script.onload = function(){
+        var el = document.getElementById('location-hub-map');
+        var citiesEl = document.getElementById('location-hub-cities');
+        if (!el || !citiesEl || !window.mapboxgl) return;
+        var token = el.dataset.token;
+        var prefix = el.dataset.prefix || '/city/';
+        var cities = JSON.parse(citiesEl.textContent || '[]');
+        window.mapboxgl.accessToken = token;
+        var map = new window.mapboxgl.Map({
+          container: 'location-hub-map',
+          style: 'mapbox://styles/mapbox/light-v11',
+          center: [-2.5, 54.0],
+          zoom: 5,
+        });
+        map.on('load', function(){
+          cities.forEach(function(c){
+            var el = document.createElement('div');
+            el.style.cssText = 'width:14px;height:14px;background:var(--color-brand,#0d6e9c);border:2px solid white;border-radius:50%;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);';
+            el.title = c.name;
+            el.addEventListener('click', function(){ window.location.href = prefix + c.slug + '/'; });
+            new window.mapboxgl.Marker({ element: el })
+              .setLngLat([c.lng, c.lat])
+              .addTo(map);
+          });
+        });
+      };
+      document.head.appendChild(script);
+    })();
+    </script>
+  </>
+) : (
+  <div class="border border-gray-200 rounded-xl p-6">
+    <p class="text-xs text-gray-500 mb-3">Map view requires Mapbox token.</p>
+    <ul class="grid sm:grid-cols-3 gap-2 text-sm">
+      {cities.map(c => (
+        <li><a href={`${cityPathPrefix}${c.slug}/`} class="text-brand hover:underline">{c.name}</a></li>
+      ))}
+    </ul>
+  </div>
+)}

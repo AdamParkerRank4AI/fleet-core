@@ -1,0 +1,94 @@
+---
+/**
+ * Calculator: generic interactive calculator shell.
+ *
+ * Pass an array of inputs (id, label, type, default, min/max/step) and a
+ * single inline JS function string that takes the input values and returns
+ * an array of `{label, value}` outputs. The component renders the inputs,
+ * recalcs on change, and displays outputs in the result panel.
+ *
+ * Use for loan calculators, MCA factor-rate calculators, fee calculators,
+ * any single-form-many-outputs pattern.
+ */
+
+interface InputSpec {
+  id: string;
+  label: string;
+  type: 'number' | 'text' | 'select';
+  default?: string | number;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: { label: string; value: string }[];
+}
+
+interface Props {
+  inputs: InputSpec[];
+  /** Function body string. Receives `vals` (object keyed by input id),
+   *  must return array of `{label, value}` to render. */
+  calc: string;
+  resultLabel?: string;
+}
+
+const { inputs, calc, resultLabel = 'Result' } = Astro.props;
+---
+
+<form class="calculator space-y-4 bg-surface border border-gray-200 rounded-xl p-6">
+  {inputs.map(i => (
+    <div>
+      <label for={`calc-${i.id}`} class="block text-sm font-bold text-gray-900 mb-2">{i.label}</label>
+      {i.type === 'select' ? (
+        <select id={`calc-${i.id}`} data-calc-input={i.id} class="w-full border border-gray-300 rounded-lg px-3 py-2">
+          {(i.options ?? []).map(o => (
+            <option value={o.value} selected={String(i.default) === o.value}>{o.label}</option>
+          ))}
+        </select>
+      ) : (
+        <input
+          id={`calc-${i.id}`}
+          data-calc-input={i.id}
+          type={i.type}
+          value={i.default}
+          min={i.min}
+          max={i.max}
+          step={i.step}
+          class="w-full border border-gray-300 rounded-lg px-3 py-2"
+        />
+      )}
+    </div>
+  ))}
+
+  <div class="pt-4 border-t border-gray-200">
+    <p class="text-xs text-gray-500 uppercase mb-2">{resultLabel}</p>
+    <div class="calc-results grid grid-cols-2 gap-4 text-sm"></div>
+  </div>
+</form>
+
+<script is:inline define:vars={{ calc }}>
+(function(){
+  document.querySelectorAll('.calculator').forEach(function(form){
+    var inputs = form.querySelectorAll('[data-calc-input]');
+    var results = form.querySelector('.calc-results');
+    var fn = new Function('vals', calc);
+    function recalc(){
+      var vals = {};
+      inputs.forEach(function(el){
+        var v = el.value;
+        var n = parseFloat(v);
+        vals[el.dataset.calcInput] = isNaN(n) ? v : n;
+      });
+      try {
+        var out = fn(vals) || [];
+        results.innerHTML = '';
+        out.forEach(function(o){
+          var d = document.createElement('div');
+          d.innerHTML = '<p class="text-xs text-gray-500">' + o.label + '</p><p class="text-2xl font-bold text-gray-900">' + o.value + '</p>';
+          results.appendChild(d);
+        });
+      } catch(e) { results.textContent = 'Calculation error: ' + e.message; }
+    }
+    inputs.forEach(function(el){ el.addEventListener('input', recalc); el.addEventListener('change', recalc); });
+    recalc();
+  });
+})();
+</script>

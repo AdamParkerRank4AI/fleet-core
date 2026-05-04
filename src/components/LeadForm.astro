@@ -1,0 +1,111 @@
+---
+/**
+ * LeadForm: configurable lead form for combi sites.
+ *
+ * Reads a partner key (passed in) plus a `partnerEndpoint` URL.
+ * Renders standard fields (name, email, phone, business name, sector
+ * by default) plus optional custom fields. Posts to FormSubmit or a
+ * client CRM endpoint.
+ *
+ * Use with site-side `partners.json` to switch endpoints per page /
+ * per partner without code changes.
+ */
+
+interface CustomField {
+  id: string;
+  label: string;
+  type: 'text' | 'email' | 'tel' | 'number' | 'select' | 'textarea';
+  required?: boolean;
+  options?: string[];
+}
+
+interface Props {
+  partnerKey: string;
+  partnerEndpoint: string;
+  successPath?: string;
+  customFields?: CustomField[];
+  consentText?: string;
+  buttonLabel?: string;
+  /** Fields to omit from the default set ('name'|'email'|'phone'|'company'|'sector') */
+  omitDefault?: string[];
+}
+
+const {
+  partnerKey,
+  partnerEndpoint,
+  successPath = '/thanks/',
+  customFields = [],
+  consentText = 'I am authorised to act on behalf of the business above. I consent to my details being passed to the partner.',
+  buttonLabel = 'Submit',
+  omitDefault = [],
+} = Astro.props;
+
+const showField = (key: string) => !omitDefault.includes(key);
+---
+
+<form class="lead-form space-y-4 bg-surface border border-gray-200 rounded-xl p-6" method="post" action={partnerEndpoint}>
+  <input type="hidden" name="_subject" value={`Lead: ${partnerKey}`} />
+  <input type="hidden" name="_next" value={successPath} />
+  <input type="hidden" name="_captcha" value="false" />
+  <input type="hidden" name="partner_key" value={partnerKey} />
+
+  {showField('name') && (
+    <div>
+      <label for="lead-name" class="block text-sm font-bold text-gray-900 mb-1">Your name</label>
+      <input id="lead-name" name="name" type="text" required class="w-full border border-gray-300 rounded-lg px-3 py-2" />
+    </div>
+  )}
+
+  {showField('email') && (
+    <div>
+      <label for="lead-email" class="block text-sm font-bold text-gray-900 mb-1">Email</label>
+      <input id="lead-email" name="email" type="email" required class="w-full border border-gray-300 rounded-lg px-3 py-2" />
+    </div>
+  )}
+
+  {showField('phone') && (
+    <div>
+      <label for="lead-phone" class="block text-sm font-bold text-gray-900 mb-1">Phone</label>
+      <input id="lead-phone" name="phone" type="tel" class="w-full border border-gray-300 rounded-lg px-3 py-2" />
+    </div>
+  )}
+
+  {showField('company') && (
+    <div>
+      <label for="lead-company" class="block text-sm font-bold text-gray-900 mb-1">Business name</label>
+      <input id="lead-company" name="company" type="text" required class="w-full border border-gray-300 rounded-lg px-3 py-2" />
+    </div>
+  )}
+
+  {showField('sector') && (
+    <div>
+      <label for="lead-sector" class="block text-sm font-bold text-gray-900 mb-1">Sector</label>
+      <input id="lead-sector" name="sector" type="text" class="w-full border border-gray-300 rounded-lg px-3 py-2" />
+    </div>
+  )}
+
+  {customFields.map(f => (
+    <div>
+      <label for={`lead-${f.id}`} class="block text-sm font-bold text-gray-900 mb-1">{f.label}</label>
+      {f.type === 'select' ? (
+        <select id={`lead-${f.id}`} name={f.id} required={f.required} class="w-full border border-gray-300 rounded-lg px-3 py-2">
+          <option value="">Select</option>
+          {(f.options ?? []).map(o => <option value={o}>{o}</option>)}
+        </select>
+      ) : f.type === 'textarea' ? (
+        <textarea id={`lead-${f.id}`} name={f.id} required={f.required} class="w-full border border-gray-300 rounded-lg px-3 py-2" rows="4" />
+      ) : (
+        <input id={`lead-${f.id}`} name={f.id} type={f.type} required={f.required} class="w-full border border-gray-300 rounded-lg px-3 py-2" />
+      )}
+    </div>
+  ))}
+
+  <label class="flex items-start gap-2 text-sm text-gray-700">
+    <input type="checkbox" name="consent" required class="mt-1" />
+    <span>{consentText}</span>
+  </label>
+
+  <button type="submit" class="w-full bg-brand text-white px-6 py-3 rounded-full font-bold hover:shadow-lg transition">
+    {buttonLabel}
+  </button>
+</form>

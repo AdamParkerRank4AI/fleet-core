@@ -1,0 +1,56 @@
+---
+/**
+ * LangSwitcher: dropdown to switch between site languages.
+ *
+ * Pass available `languages` (array of {code, label, path?}) and the
+ * current locale. Renders a dropdown that navigates to the equivalent
+ * page in the chosen language. Path defaults to `/[lang]/{currentPath}`.
+ *
+ * Used in conjunction with Astro's i18n routing. The site-side wiring
+ * sets `defaultLocale` in astro.config.mjs and configures locale
+ * directories under `src/pages/<lang>/`.
+ */
+
+interface Lang {
+  code: string;
+  label: string;
+  /** Optional explicit path; otherwise constructed as /<code>/<currentPath> */
+  path?: string;
+}
+
+interface Props {
+  languages: Lang[];
+  currentLocale: string;
+  canonicalLocale: string;
+  /** Current page path (without leading lang segment), e.g. "/about/" */
+  currentPath: string;
+}
+
+const { languages, currentLocale, canonicalLocale, currentPath } = Astro.props;
+
+function pathFor(l: Lang): string {
+  if (l.path) return l.path;
+  if (l.code === canonicalLocale) return currentPath;
+  return `/${l.code}${currentPath}`;
+}
+---
+
+<select
+  class="lang-switcher border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white"
+  data-current-path={currentPath}
+>
+  {languages.map(l => (
+    <option value={pathFor(l)} selected={l.code === currentLocale}>{l.label}</option>
+  ))}
+</select>
+
+<script is:inline>
+(function(){
+  document.querySelectorAll('.lang-switcher').forEach(function(sel){
+    sel.addEventListener('change', function(e){
+      var url = e.target.value;
+      if (url) window.location.href = url;
+    });
+  });
+})();
+</script>

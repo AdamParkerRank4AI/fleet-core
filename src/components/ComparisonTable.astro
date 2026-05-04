@@ -1,0 +1,50 @@
+---
+/**
+ * ComparisonTable: data-driven comparison table.
+ *
+ * Pass an array of column headers and an array of rows. Each row is
+ * an object: { label, values }. Values can be plain strings or HTML
+ * (set:html). Used for "X vs Y" pages, lender comparisons, terminal
+ * specs side-by-side.
+ */
+
+interface Row {
+  label: string;
+  values: string[];
+}
+
+interface Props {
+  columns: string[];
+  rows: Row[];
+  caption?: string;
+  highlightCol?: number;
+}
+
+const { columns, rows, caption, highlightCol } = Astro.props;
+---
+
+<div class="overflow-x-auto">
+  <table class="w-full border-collapse text-sm">
+    {caption && <caption class="text-left text-xs text-gray-500 mb-2 px-2">{caption}</caption>}
+    <thead>
+      <tr class="border-b-2 border-gray-200">
+        <th class="text-left p-2 font-bold text-gray-500 text-xs uppercase tracking-wide"></th>
+        {columns.map((c, i) => (
+          <th class={`text-left p-2 font-bold text-gray-900 ${highlightCol === i ? 'bg-brand/5' : ''}`}>
+            {c}
+          </th>
+        ))}
+      </tr>
+    </thead>
+    <tbody>
+      {rows.map((r) => (
+        <tr class="border-b border-gray-100">
+          <td class="p-2 font-semibold text-gray-700">{r.label}</td>
+          {r.values.map((v, i) => (
+            <td class={`p-2 text-gray-700 ${highlightCol === i ? 'bg-brand/5 font-medium' : ''}`} set:html={v} />
+          ))}
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
