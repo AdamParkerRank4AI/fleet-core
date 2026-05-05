@@ -1,0 +1,206 @@
+---
+/**
+ * Hero — homepage / hub-page hero block.
+ *
+ * Variants:
+ *   - editorial  → BBL-style: serif title, restrained, prose-led
+ *   - leadgen    → FundBiz-style: bolder title, primary CTA dominant
+ *   - product    → CardTerminals-style: product-led, image-friendly
+ *
+ * Pass an optional `items` array to render a "top 3 cards" strip below the
+ * hero copy — used for "best 3 lenders" / "top 3 terminals" / etc. style
+ * conversion-on-fold treatments.
+ */
+
+interface HeroCard {
+  label: string;
+  href: string;
+  blurb?: string;
+  badge?: string;
+}
+
+interface HeroCta {
+  label: string;
+  href: string;
+}
+
+interface Props {
+  variant?: "editorial" | "leadgen" | "product";
+  eyebrow?: string;
+  title: string;
+  intro?: string;
+  primaryCta?: HeroCta;
+  secondaryCta?: HeroCta;
+  items?: HeroCard[];
+  itemsHeading?: string;
+}
+
+const {
+  variant = "editorial",
+  eyebrow,
+  title,
+  intro,
+  primaryCta,
+  secondaryCta,
+  items,
+  itemsHeading,
+} = Astro.props;
+---
+
+<section
+  class:list={["fc-hero", `fc-hero--${variant}`]}
+  data-variant={variant}
+>
+  <div class="fc-hero__inner">
+    {eyebrow && <p class="fc-eyebrow fc-hero__eyebrow">{eyebrow}</p>}
+
+    <h1 class="fc-hero__title">{title}</h1>
+
+    {intro && <p class="fc-hero__intro">{intro}</p>}
+
+    {(primaryCta || secondaryCta) && (
+      <div class="fc-hero__ctas">
+        {primaryCta && <a href={primaryCta.href} class="fc-btn-primary">{primaryCta.label}</a>}
+        {secondaryCta && <a href={secondaryCta.href} class="fc-btn-ghost">{secondaryCta.label}</a>}
+      </div>
+    )}
+  </div>
+
+  {items && items.length > 0 && (
+    <div class="fc-hero__items">
+      {itemsHeading && <h2 class="fc-hero__items-heading">{itemsHeading}</h2>}
+      <div class="fc-hero__grid">
+        {items.map((item, i) => (
+          <a href={item.href} class="fc-card fc-hero__card">
+            <span class="fc-hero__rank">{i + 1}</span>
+            <div class="fc-hero__card-body">
+              <div class="fc-hero__card-label">{item.label}</div>
+              {item.blurb && <p class="fc-hero__card-blurb">{item.blurb}</p>}
+              {item.badge && <span class="fc-pill">{item.badge}</span>}
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  )}
+</section>
+
+<style>
+  .fc-hero {
+    padding: var(--fc-sp-20) var(--fc-sp-4) var(--fc-sp-12);
+    background: var(--fc-bg);
+    border-bottom: 1px solid var(--fc-border);
+  }
+
+  .fc-hero__inner {
+    max-width: var(--fc-w-prose);
+    margin: 0 auto;
+  }
+
+  .fc-hero__eyebrow {
+    margin-bottom: var(--fc-sp-4);
+  }
+
+  .fc-hero__title {
+    font-family: var(--fc-font-display);
+    font-weight: 700;
+    line-height: var(--fc-leading-tight);
+    letter-spacing: -0.02em;
+    color: var(--fc-text);
+    margin: 0 0 var(--fc-sp-6);
+    font-size: var(--fc-fs-4xl);
+  }
+
+  @media (min-width: 768px) {
+    .fc-hero__title {
+      font-size: var(--fc-fs-6xl);
+    }
+  }
+
+  .fc-hero--leadgen .fc-hero__title {
+    font-family: var(--fc-font-body);
+    letter-spacing: -0.025em;
+  }
+
+  .fc-hero__intro {
+    font-family: var(--fc-font-body);
+    font-size: var(--fc-fs-xl);
+    line-height: var(--fc-leading-snug);
+    color: var(--fc-text-muted);
+    margin: 0 0 var(--fc-sp-8);
+  }
+
+  .fc-hero__ctas {
+    display: flex;
+    gap: var(--fc-sp-3);
+    flex-wrap: wrap;
+  }
+
+  /* Items strip */
+  .fc-hero__items {
+    max-width: var(--fc-w-content);
+    margin: var(--fc-sp-12) auto 0;
+    padding: 0 var(--fc-sp-4);
+  }
+
+  .fc-hero__items-heading {
+    font-family: var(--fc-font-body);
+    font-size: var(--fc-fs-xs);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fc-text-subtle);
+    margin: 0 0 var(--fc-sp-4);
+  }
+
+  .fc-hero__grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--fc-sp-4);
+  }
+
+  @media (min-width: 768px) {
+    .fc-hero__grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  .fc-hero__card {
+    display: flex;
+    gap: var(--fc-sp-4);
+    align-items: flex-start;
+    padding: var(--fc-sp-6);
+  }
+
+  .fc-hero__rank {
+    font-family: var(--fc-font-display);
+    font-size: var(--fc-fs-3xl);
+    font-weight: 700;
+    line-height: 1;
+    color: var(--fc-accent);
+    flex-shrink: 0;
+  }
+
+  .fc-hero__card-body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .fc-hero__card-label {
+    font-weight: 700;
+    font-size: var(--fc-fs-base);
+    margin-bottom: var(--fc-sp-1);
+    color: var(--fc-text);
+  }
+
+  .fc-hero__card-blurb {
+    font-size: var(--fc-fs-sm);
+    color: var(--fc-text-muted);
+    line-height: var(--fc-leading-snug);
+    margin: 0 0 var(--fc-sp-2);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+</style>

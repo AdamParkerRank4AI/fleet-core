@@ -1,0 +1,234 @@
+/**
+ * Fleet-core theme tokens.
+ *
+ * Sites import this once in their root layout. Typography, colour tokens,
+ * spacing and per-tier accents live here. Sites override by setting
+ * data-tier="..." on the html or body element.
+ *
+ * Usage in a site's BaseLayout:
+ *   <link rel="stylesheet" href="/_fleet-core/theme.css" />
+ *   OR (recommended) import via Astro:
+ *     import "@rank4ai/fleet-core/styles/theme.css";
+ *
+ * Per-tier defaults:
+ *   data-tier="editorial"    — BBL-style: serif headings, generous whitespace,
+ *                              restrained accent. The editorial-trust look.
+ *   data-tier="leadgen"      — FundBiz-style: bolder accent, sans headings,
+ *                              more CTA emphasis.
+ *   data-tier="product"      — CardTerminals-style: product-led, image-ready.
+ */
+
+:root {
+  /* Type scale (1.25 ratio, base 16px) */
+  --fc-fs-xs: 0.75rem;     /*  12 */
+  --fc-fs-sm: 0.875rem;    /*  14 */
+  --fc-fs-base: 1rem;      /*  16 */
+  --fc-fs-lg: 1.125rem;    /*  18 */
+  --fc-fs-xl: 1.25rem;     /*  20 */
+  --fc-fs-2xl: 1.5rem;     /*  24 */
+  --fc-fs-3xl: 1.875rem;   /*  30 */
+  --fc-fs-4xl: 2.25rem;    /*  36 */
+  --fc-fs-5xl: 3rem;       /*  48 */
+  --fc-fs-6xl: 3.75rem;    /*  60 */
+
+  /* Spacing (4px base) */
+  --fc-sp-1: 0.25rem;
+  --fc-sp-2: 0.5rem;
+  --fc-sp-3: 0.75rem;
+  --fc-sp-4: 1rem;
+  --fc-sp-6: 1.5rem;
+  --fc-sp-8: 2rem;
+  --fc-sp-10: 2.5rem;
+  --fc-sp-12: 3rem;
+  --fc-sp-16: 4rem;
+  --fc-sp-20: 5rem;
+  --fc-sp-24: 6rem;
+
+  /* Type families. Sites override --fc-font-display to swap the headline serif. */
+  --fc-font-display: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --fc-font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --fc-font-mono: ui-monospace, "SF Mono", "Cascadia Code", monospace;
+
+  /* Surface tokens (light theme) */
+  --fc-bg: #fafaf7;             /* warm off-white, more inviting than pure white */
+  --fc-bg-card: #ffffff;
+  --fc-bg-muted: #f4f4ee;
+  --fc-text: #18181b;            /* near-black, not pure black */
+  --fc-text-muted: #52525b;
+  --fc-text-subtle: #71717a;
+  --fc-border: #e4e4dd;
+  --fc-border-strong: #d4d4ce;
+
+  /* Brand-accent — overridden per tier below */
+  --fc-accent: #0f766e;          /* default editorial teal */
+  --fc-accent-text: #ffffff;
+  --fc-accent-muted: #ccfbf1;
+
+  /* Semantic */
+  --fc-success: #15803d;
+  --fc-warn: #b45309;
+  --fc-danger: #b91c1c;
+
+  /* Radii + shadow */
+  --fc-radius-sm: 0.375rem;
+  --fc-radius: 0.625rem;
+  --fc-radius-lg: 1rem;
+  --fc-radius-pill: 9999px;
+  --fc-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --fc-shadow: 0 6px 24px -8px rgba(15, 23, 42, 0.12);
+  --fc-shadow-lg: 0 16px 40px -12px rgba(15, 23, 42, 0.18);
+
+  /* Container widths */
+  --fc-w-prose: 42rem;          /* 672 — primary editorial reading width */
+  --fc-w-content: 56rem;        /* 896 — hub pages with grids */
+  --fc-w-wide: 72rem;           /* 1152 — full marketing sections */
+
+  /* Editorial baseline measurements */
+  --fc-leading-tight: 1.15;
+  --fc-leading-snug: 1.3;
+  --fc-leading-normal: 1.55;
+  --fc-leading-relaxed: 1.7;
+}
+
+/* ========================================================================
+   Per-tier accent overrides
+   ======================================================================== */
+
+[data-tier="editorial"] {
+  --fc-accent: #0f4c81;          /* deep editorial blue */
+  --fc-accent-muted: #e7f0fa;
+}
+
+[data-tier="leadgen"] {
+  --fc-accent: #c2410c;          /* warmer rust — conversion-focused */
+  --fc-accent-muted: #ffedd5;
+}
+
+[data-tier="product"] {
+  --fc-accent: #0f766e;          /* product teal */
+  --fc-accent-muted: #ccfbf1;
+}
+
+[data-tier="client"] {
+  --fc-accent: #166534;          /* client trust green */
+  --fc-accent-muted: #dcfce7;
+}
+
+/* ========================================================================
+   Typography defaults — opt-in via .fc-prose or .fc-display
+   Sites that already have type scales should NOT use these defaults.
+   ======================================================================== */
+
+.fc-display {
+  font-family: var(--fc-font-display);
+  font-weight: 700;
+  line-height: var(--fc-leading-tight);
+  letter-spacing: -0.015em;
+}
+
+.fc-prose {
+  font-family: var(--fc-font-body);
+  line-height: var(--fc-leading-relaxed);
+  color: var(--fc-text);
+}
+
+.fc-prose h1, .fc-prose h2, .fc-prose h3 {
+  font-family: var(--fc-font-display);
+  font-weight: 700;
+  line-height: var(--fc-leading-tight);
+  letter-spacing: -0.015em;
+  color: var(--fc-text);
+}
+
+.fc-prose h1 { font-size: var(--fc-fs-5xl); margin-top: 0; margin-bottom: var(--fc-sp-6); }
+.fc-prose h2 { font-size: var(--fc-fs-3xl); margin-top: var(--fc-sp-12); margin-bottom: var(--fc-sp-4); }
+.fc-prose h3 { font-size: var(--fc-fs-xl); margin-top: var(--fc-sp-8); margin-bottom: var(--fc-sp-3); }
+
+.fc-prose p { margin-top: var(--fc-sp-4); margin-bottom: var(--fc-sp-4); }
+
+.fc-prose a {
+  color: var(--fc-accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.fc-prose a:hover { text-decoration-thickness: 2px; }
+
+.fc-prose ul, .fc-prose ol { padding-left: var(--fc-sp-6); margin-top: var(--fc-sp-4); margin-bottom: var(--fc-sp-4); }
+.fc-prose ul { list-style: disc; }
+.fc-prose ol { list-style: decimal; }
+.fc-prose li { margin-bottom: var(--fc-sp-2); }
+
+/* ========================================================================
+   Component primitives
+   ======================================================================== */
+
+.fc-eyebrow {
+  font-family: var(--fc-font-body);
+  font-size: var(--fc-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fc-accent);
+}
+
+.fc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fc-sp-2);
+  padding: var(--fc-sp-1) var(--fc-sp-3);
+  border-radius: var(--fc-radius-pill);
+  background: var(--fc-accent-muted);
+  color: var(--fc-accent);
+  font-size: var(--fc-fs-xs);
+  font-weight: 600;
+}
+
+.fc-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fc-sp-2);
+  padding: var(--fc-sp-3) var(--fc-sp-6);
+  border-radius: var(--fc-radius-pill);
+  background: var(--fc-accent);
+  color: var(--fc-accent-text);
+  font-weight: 700;
+  font-size: var(--fc-fs-base);
+  text-decoration: none;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+  box-shadow: var(--fc-shadow-sm);
+}
+.fc-btn-primary:hover { transform: translateY(-1px); box-shadow: var(--fc-shadow); }
+
+.fc-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fc-sp-2);
+  padding: var(--fc-sp-3) var(--fc-sp-6);
+  border-radius: var(--fc-radius-pill);
+  background: transparent;
+  color: var(--fc-text);
+  border: 1px solid var(--fc-border-strong);
+  font-weight: 600;
+  font-size: var(--fc-fs-base);
+  text-decoration: none;
+  transition: border-color 120ms ease;
+}
+.fc-btn-ghost:hover { border-color: var(--fc-accent); color: var(--fc-accent); }
+
+.fc-card {
+  background: var(--fc-bg-card);
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-lg);
+  padding: var(--fc-sp-6);
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+.fc-card:hover {
+  border-color: var(--fc-border-strong);
+  box-shadow: var(--fc-shadow);
+  transform: translateY(-2px);
+}
+
+a.fc-card { display: block; color: inherit; text-decoration: none; }

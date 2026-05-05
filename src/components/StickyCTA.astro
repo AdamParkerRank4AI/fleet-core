@@ -1,0 +1,143 @@
+---
+/**
+ * StickyCTA — bottom-of-screen CTA bar that follows the user as they read.
+ *
+ * Conversion-focused. Use on review pages, listicle pages, sector pages where
+ * a clear next-step exists ("Apply via FundBiz", "Get terminal quotes",
+ * "Read full review").
+ *
+ * Hides on small scroll positions (when the in-page CTA is visible) and
+ * appears as the user scrolls past the fold. Dismissable via a small ✕.
+ *
+ * Props:
+ *   - label       primary CTA text
+ *   - href        primary CTA link
+ *   - context     small left-side context line ("Reviewed by Oliver Mackman")
+ *   - secondary   optional second CTA
+ */
+
+interface Props {
+  label: string;
+  href: string;
+  context?: string;
+  secondary?: { label: string; href: string };
+}
+
+const { label, href, context, secondary } = Astro.props;
+---
+
+<aside class="fc-stickycta" data-fc-stickycta data-hidden="true" aria-label="Sticky page action">
+  <div class="fc-stickycta__inner">
+    {context && <span class="fc-stickycta__context">{context}</span>}
+    <div class="fc-stickycta__actions">
+      {secondary && <a href={secondary.href} class="fc-stickycta__secondary">{secondary.label}</a>}
+      <a href={href} class="fc-btn-primary fc-stickycta__primary">{label}</a>
+    </div>
+    <button type="button" class="fc-stickycta__dismiss" aria-label="Dismiss sticky CTA" data-fc-stickycta-dismiss>✕</button>
+  </div>
+</aside>
+
+<script is:inline>
+  (function () {
+    const bar = document.querySelector("[data-fc-stickycta]");
+    if (!bar) return;
+    const dismiss = bar.querySelector("[data-fc-stickycta-dismiss]");
+
+    const showAfter = 600; // px scroll before showing
+    let dismissed = sessionStorage.getItem("fc-stickycta-dismissed") === "1";
+
+    const update = () => {
+      if (dismissed) {
+        bar.setAttribute("data-hidden", "true");
+        return;
+      }
+      const y = window.scrollY || window.pageYOffset;
+      const nearBottom = window.innerHeight + y >= document.body.offsetHeight - 200;
+      bar.setAttribute("data-hidden", y < showAfter || nearBottom ? "true" : "false");
+    };
+
+    dismiss?.addEventListener("click", () => {
+      dismissed = true;
+      sessionStorage.setItem("fc-stickycta-dismissed", "1");
+      bar.setAttribute("data-hidden", "true");
+    });
+
+    window.addEventListener("scroll", update, { passive: true });
+    update();
+  })();
+</script>
+
+<style>
+  .fc-stickycta {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    background: var(--fc-text);
+    color: white;
+    transition: transform 220ms ease;
+  }
+
+  .fc-stickycta[data-hidden="true"] {
+    transform: translateY(100%);
+  }
+
+  .fc-stickycta__inner {
+    max-width: var(--fc-w-wide);
+    margin: 0 auto;
+    padding: var(--fc-sp-3) var(--fc-sp-4);
+    display: flex;
+    align-items: center;
+    gap: var(--fc-sp-4);
+  }
+
+  .fc-stickycta__context {
+    flex: 1;
+    font-size: var(--fc-fs-sm);
+    color: rgba(255, 255, 255, 0.7);
+    display: none;
+  }
+
+  @media (min-width: 768px) {
+    .fc-stickycta__context {
+      display: block;
+    }
+  }
+
+  .fc-stickycta__actions {
+    display: flex;
+    gap: var(--fc-sp-3);
+    align-items: center;
+    flex: 1;
+    justify-content: flex-end;
+  }
+
+  .fc-stickycta__secondary {
+    color: white;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    font-size: var(--fc-fs-sm);
+    display: none;
+  }
+
+  @media (min-width: 640px) {
+    .fc-stickycta__secondary { display: inline; }
+  }
+
+  .fc-stickycta__primary {
+    padding: var(--fc-sp-2) var(--fc-sp-4);
+    font-size: var(--fc-fs-sm);
+  }
+
+  .fc-stickycta__dismiss {
+    background: transparent;
+    border: 0;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: var(--fc-fs-base);
+    cursor: pointer;
+    padding: var(--fc-sp-1);
+    line-height: 1;
+  }
+  .fc-stickycta__dismiss:hover { color: white; }
+</style>

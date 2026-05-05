@@ -1,0 +1,87 @@
+---
+/**
+ * TrustBand — small editorial trust signal placed near the H1 on review,
+ * listicle and sector pages.
+ *
+ * Renders as a horizontal bar of "label: value" pairs separated by dots.
+ * Designed to compress E-E-A-T evidence into one glance.
+ *
+ * Examples:
+ *   <TrustBand items={[
+ *     { label: "Reviewed", value: "26 April 2026" },
+ *     { label: "Editor", value: "Oliver Mackman" },
+ *     { label: "Lenders covered", value: "19" },
+ *     { label: "Independence", value: "Editorial only · No paid placement" },
+ *   ]} />
+ */
+
+interface BandItem {
+  label: string;
+  value: string;
+  href?: string;
+}
+
+interface Props {
+  items: BandItem[];
+}
+
+const { items } = Astro.props;
+---
+
+<div class="fc-trustband" role="complementary" aria-label="Editorial trust signals">
+  <ul class="fc-trustband__list">
+    {items.map(item => (
+      <li class="fc-trustband__item">
+        <span class="fc-trustband__label">{item.label}</span>
+        {item.href ? (
+          <a href={item.href} class="fc-trustband__value fc-trustband__link">{item.value}</a>
+        ) : (
+          <span class="fc-trustband__value">{item.value}</span>
+        )}
+      </li>
+    ))}
+  </ul>
+</div>
+
+<style>
+  .fc-trustband {
+    border-top: 1px solid var(--fc-border);
+    border-bottom: 1px solid var(--fc-border);
+    padding: var(--fc-sp-3) 0;
+    margin: var(--fc-sp-6) 0;
+  }
+
+  .fc-trustband__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--fc-sp-1) var(--fc-sp-6);
+  }
+
+  .fc-trustband__item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--fc-sp-2);
+    font-size: var(--fc-fs-xs);
+  }
+
+  .fc-trustband__label {
+    color: var(--fc-text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+
+  .fc-trustband__value {
+    color: var(--fc-text);
+    font-weight: 600;
+  }
+
+  .fc-trustband__link {
+    color: var(--fc-accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+</style>
