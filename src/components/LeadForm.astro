@@ -262,6 +262,14 @@ const clientConfig = {
           turnover, industry, finance_type: financeType,
           applied_from: cfg.appliedFrom,
           page_url: window.location.href,
+          // Attribution carries through to partial-fill notifications too
+          lead_source: inferSource(attribution),
+          landing_path: attribution.landing_path || '',
+          referrer: attribution.referrer || '(direct)',
+          utm_source: attribution.utm_source || '',
+          utm_campaign: attribution.utm_campaign || '',
+          gclid: attribution.gclid || '',
+          fbclid: attribution.fbclid || '',
           note: 'Step 1 complete; not yet submitted. May still be filling step 2.',
         }),
       }).catch(() => {});
@@ -384,6 +392,25 @@ const clientConfig = {
     data._subject = cfg.emailSubject;
     data._template = 'table';
     data.page_url = window.location.href;
+
+    // Merge first-touch attribution into the email payload so source / UTM /
+    // referrer / click IDs are visible in the lead email even when Supabase
+    // logging isn't configured. Fields are intentionally human-readable for
+    // FormSubmit's table template.
+    const inferredSource = inferSource(attribution);
+    data.lead_source = inferredSource;
+    data.landing_path = attribution.landing_path || '';
+    data.referrer = attribution.referrer || '(direct)';
+    data.referrer_host = attribution.referrer_host || '';
+    data.utm_source = attribution.utm_source || '';
+    data.utm_medium = attribution.utm_medium || '';
+    data.utm_campaign = attribution.utm_campaign || '';
+    data.utm_term = attribution.utm_term || '';
+    data.utm_content = attribution.utm_content || '';
+    data.gclid = attribution.gclid || '';
+    data.fbclid = attribution.fbclid || '';
+    data.msclkid = attribution.msclkid || '';
+    data.session_started_at = attribution.session_started_at || '';
 
     const submitBtn = form.querySelector('button[type="submit"]');
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Sending…'; }
