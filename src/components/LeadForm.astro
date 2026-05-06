@@ -1,111 +1,568 @@
 ---
 /**
- * LeadForm: configurable lead form for combi sites.
+ * LeadForm — fleet-canonical lead capture form.
  *
- * Reads a partner key (passed in) plus a `partnerEndpoint` URL.
- * Renders standard fields (name, email, phone, business name, sector
- * by default) plus optional custom fields. Posts to FormSubmit or a
- * client CRM endpoint.
+ * Lifted from MarketInvoice's working production component (350 pages,
+ * captures real leads). Adds:
+ *   - Site-configurable finance types, industries, turnover bands
+ *   - Site-configurable submit endpoint + Supabase table
+ *   - Explicit `applied_from` field stamped on every lead so attribution
+ *     captures which page funnelled the user in
  *
- * Use with site-side `partners.json` to switch endpoints per page /
- * per partner without code changes.
+ * Two-step form:
+ *   Step 1 — turnover, industry, finance type, company name (Companies House autocomplete)
+ *   Step 2 — contact name, email, phone (with UK validation)
+ *
+ * Tracks every meaningful event:
+ *   form_view, company_selected, form_step_2, form_step_back,
+ *   form_abandon_step2 (5 min after entering step 2 with no submit),
+ *   form_submit_success / form_submit_error
+ *
+ * Logs to Supabase at: step_1_complete, form_submit, form_abandon.
+ * Sends partial-fill email notification when step 1 completes.
+ *
+ * First-touch attribution stored in sessionStorage (sticky across pages):
+ * UTM params, gclid/fbclid/msclkid, referrer + inferred source
+ * (google-organic, chatgpt, perplexity, claude, gemini, etc.)
  */
 
-interface CustomField {
-  id: string;
+interface FinanceOption {
+  value: string;
   label: string;
-  type: 'text' | 'email' | 'tel' | 'number' | 'select' | 'textarea';
-  required?: boolean;
-  options?: string[];
+}
+
+export interface LeadFormConfig {
+  submitEndpoint: string;
+  partialFillEmail?: string;
+  emailSubject?: string;
+  supabase?: { url: string; anonKey: string; table: string };
+  companiesHouseApiKey?: string;
+  industries: FinanceOption[];
+  financeTypes: FinanceOption[];
+  turnoverBands: FinanceOption[];
+  trustPills?: string[];
+  successHTML?: string;
+  privacyPath?: string;
+  attributionKey?: string;
 }
 
 interface Props {
-  partnerKey: string;
-  partnerEndpoint: string;
-  successPath?: string;
-  customFields?: CustomField[];
-  consentText?: string;
-  buttonLabel?: string;
-  /** Fields to omit from the default set ('name'|'email'|'phone'|'company'|'sector') */
-  omitDefault?: string[];
+  config: LeadFormConfig;
+  heading?: string;
+  subheading?: string;
+  appliedFrom?: string;
+  defaultFinanceType?: string;
 }
 
 const {
-  partnerKey,
-  partnerEndpoint,
-  successPath = '/thanks/',
-  customFields = [],
-  consentText = 'I am authorised to act on behalf of the business above. I consent to my details being passed to the partner.',
-  buttonLabel = 'Submit',
-  omitDefault = [],
+  config,
+  heading = "Get matched with the right lender",
+  subheading = "Two minutes. No obligation. Soft search only.",
+  appliedFrom,
+  defaultFinanceType,
 } = Astro.props;
 
-const showField = (key: string) => !omitDefault.includes(key);
+const resolvedAppliedFrom = appliedFrom || Astro.url.pathname;
+
+const clientConfig = {
+  submitEndpoint: config.submitEndpoint,
+  partialFillEmail: config.partialFillEmail || null,
+  emailSubject: config.emailSubject || "New lead",
+  supabase: config.supabase || null,
+  companiesHouseApiKey: config.companiesHouseApiKey || null,
+  attributionKey: config.attributionKey || "fc_first_touch",
+  appliedFrom: resolvedAppliedFrom,
+  successHTML:
+    config.successHTML ||
+    '<div class="text-center py-8"><h3 class="text-2xl font-bold mb-2">Thank you</h3><p style="color: rgba(255,255,255,0.7);">We\'ll be in touch within 24 hours.</p></div>',
+  privacyPath: config.privacyPath || "/privacy/",
+};
 ---
 
-<form class="lead-form space-y-4 bg-surface border border-gray-200 rounded-xl p-6" method="post" action={partnerEndpoint}>
-  <input type="hidden" name="_subject" value={`Lead: ${partnerKey}`} />
-  <input type="hidden" name="_next" value={successPath} />
-  <input type="hidden" name="_captcha" value="false" />
-  <input type="hidden" name="partner_key" value={partnerKey} />
+<section class="fc-leadform" data-fc-leadform>
+  <div class="fc-leadform__inner">
+    <h2 class="fc-leadform__heading">{heading}</h2>
+    {subheading && <p class="fc-leadform__sub">{subheading}</p>}
 
-  {showField('name') && (
-    <div>
-      <label for="lead-name" class="block text-sm font-bold text-gray-900 mb-1">Your name</label>
-      <input id="lead-name" name="name" type="text" required class="w-full border border-gray-300 rounded-lg px-3 py-2" />
-    </div>
-  )}
+    <form id="fc-lead-form" class="fc-leadform__form" novalidate>
+      <input type="hidden" name="applied_from" value={resolvedAppliedFrom} />
+      <input type="hidden" name="applied_from_url" id="fc-applied-from-url" />
 
-  {showField('email') && (
-    <div>
-      <label for="lead-email" class="block text-sm font-bold text-gray-900 mb-1">Email</label>
-      <input id="lead-email" name="email" type="email" required class="w-full border border-gray-300 rounded-lg px-3 py-2" />
-    </div>
-  )}
-
-  {showField('phone') && (
-    <div>
-      <label for="lead-phone" class="block text-sm font-bold text-gray-900 mb-1">Phone</label>
-      <input id="lead-phone" name="phone" type="tel" class="w-full border border-gray-300 rounded-lg px-3 py-2" />
-    </div>
-  )}
-
-  {showField('company') && (
-    <div>
-      <label for="lead-company" class="block text-sm font-bold text-gray-900 mb-1">Business name</label>
-      <input id="lead-company" name="company" type="text" required class="w-full border border-gray-300 rounded-lg px-3 py-2" />
-    </div>
-  )}
-
-  {showField('sector') && (
-    <div>
-      <label for="lead-sector" class="block text-sm font-bold text-gray-900 mb-1">Sector</label>
-      <input id="lead-sector" name="sector" type="text" class="w-full border border-gray-300 rounded-lg px-3 py-2" />
-    </div>
-  )}
-
-  {customFields.map(f => (
-    <div>
-      <label for={`lead-${f.id}`} class="block text-sm font-bold text-gray-900 mb-1">{f.label}</label>
-      {f.type === 'select' ? (
-        <select id={`lead-${f.id}`} name={f.id} required={f.required} class="w-full border border-gray-300 rounded-lg px-3 py-2">
+      <div id="fc-step-1" class="fc-leadform__step">
+        <label class="fc-leadform__label" for="fc-turnover">Annual turnover</label>
+        <select id="fc-turnover" name="turnover" required class="fc-leadform__input">
           <option value="">Select</option>
-          {(f.options ?? []).map(o => <option value={o}>{o}</option>)}
+          {config.turnoverBands.map(b => <option value={b.value}>{b.label}</option>)}
         </select>
-      ) : f.type === 'textarea' ? (
-        <textarea id={`lead-${f.id}`} name={f.id} required={f.required} class="w-full border border-gray-300 rounded-lg px-3 py-2" rows="4" />
-      ) : (
-        <input id={`lead-${f.id}`} name={f.id} type={f.type} required={f.required} class="w-full border border-gray-300 rounded-lg px-3 py-2" />
-      )}
-    </div>
-  ))}
 
-  <label class="flex items-start gap-2 text-sm text-gray-700">
-    <input type="checkbox" name="consent" required class="mt-1" />
-    <span>{consentText}</span>
-  </label>
+        <label class="fc-leadform__label" for="fc-industry">Industry / sector</label>
+        <select id="fc-industry" name="industry" required class="fc-leadform__input">
+          <option value="">Select</option>
+          {config.industries.map(i => <option value={i.value}>{i.label}</option>)}
+        </select>
 
-  <button type="submit" class="w-full bg-brand text-white px-6 py-3 rounded-full font-bold hover:shadow-lg transition">
-    {buttonLabel}
-  </button>
-</form>
+        <label class="fc-leadform__label" for="fc-finance-type">Type of finance you need</label>
+        <select id="fc-finance-type" name="finance_type" required class="fc-leadform__input">
+          <option value="">Select</option>
+          {config.financeTypes.map(f => (
+            <option value={f.value} selected={defaultFinanceType === f.value}>{f.label}</option>
+          ))}
+        </select>
+
+        <label class="fc-leadform__label" for="fc-company">
+          Company name <span class="fc-leadform__required">*</span>
+        </label>
+        <div class="fc-leadform__company-wrap">
+          <input type="text" id="fc-company" name="company" required autocomplete="off"
+            class="fc-leadform__input"
+            placeholder="Start typing your registered company name…" />
+          <div id="fc-ch-results" class="fc-leadform__ch-results" hidden></div>
+        </div>
+        <input type="hidden" id="fc-company-number" name="company_number" />
+        <input type="hidden" id="fc-company-status" name="company_status" />
+        <p id="fc-ch-info" class="fc-leadform__ch-info" hidden></p>
+
+        <button type="button" id="fc-next-step" class="fc-btn-primary fc-leadform__cta">Next →</button>
+      </div>
+
+      <div id="fc-step-2" class="fc-leadform__step" hidden>
+        <label class="fc-leadform__label" for="fc-name">Your name <span class="fc-leadform__required">*</span></label>
+        <input type="text" id="fc-name" name="name" required class="fc-leadform__input" placeholder="Full name" />
+
+        <label class="fc-leadform__label" for="fc-email">Work email <span class="fc-leadform__required">*</span></label>
+        <input type="email" id="fc-email" name="email" required class="fc-leadform__input" placeholder="you@company.co.uk" />
+        <p id="fc-email-error" class="fc-leadform__error" hidden>Please enter a valid email address.</p>
+
+        <label class="fc-leadform__label" for="fc-phone">Phone <span class="fc-leadform__required">*</span></label>
+        <input type="tel" id="fc-phone" name="phone" required class="fc-leadform__input" placeholder="07xxx xxx xxx" />
+        <p id="fc-phone-error" class="fc-leadform__error" hidden>Please enter a valid UK phone number.</p>
+
+        <button type="submit" class="fc-btn-primary fc-leadform__cta">Submit application →</button>
+        <button type="button" id="fc-prev-step" class="fc-leadform__back">← Back</button>
+      </div>
+    </form>
+
+    <p class="fc-leadform__privacy">
+      Your details are secure. See our <a href={config.privacyPath || "/privacy/"}>privacy policy</a>.
+    </p>
+
+    {config.trustPills && config.trustPills.length > 0 && (
+      <div class="fc-leadform__pills">
+        {config.trustPills.map((p, i) => (
+          <span>{p}{i < config.trustPills!.length - 1 && <span class="fc-leadform__sep"> · </span>}</span>
+        ))}
+      </div>
+    )}
+  </div>
+</section>
+
+<script define:vars={{ cfg: clientConfig }}>
+  function getOrSetFirstTouch() {
+    const KEY = cfg.attributionKey;
+    try {
+      const existing = sessionStorage.getItem(KEY);
+      if (existing) return JSON.parse(existing);
+    } catch {}
+    const url = new URL(window.location.href);
+    const ft = {
+      landing_url: window.location.href,
+      landing_path: window.location.pathname,
+      referrer: document.referrer || null,
+      referrer_host: document.referrer ? (new URL(document.referrer).hostname) : null,
+      utm_source: url.searchParams.get('utm_source'),
+      utm_medium: url.searchParams.get('utm_medium'),
+      utm_campaign: url.searchParams.get('utm_campaign'),
+      utm_term: url.searchParams.get('utm_term'),
+      utm_content: url.searchParams.get('utm_content'),
+      gclid: url.searchParams.get('gclid'),
+      fbclid: url.searchParams.get('fbclid'),
+      msclkid: url.searchParams.get('msclkid'),
+      session_started_at: new Date().toISOString(),
+    };
+    try { sessionStorage.setItem(KEY, JSON.stringify(ft)); } catch {}
+    return ft;
+  }
+
+  function inferSource(ft) {
+    if (ft.utm_source) return ft.utm_source;
+    if (ft.gclid) return 'google-ads';
+    if (ft.fbclid) return 'facebook-ads';
+    if (ft.msclkid) return 'bing-ads';
+    if (!ft.referrer_host) return 'direct';
+    const h = ft.referrer_host.toLowerCase();
+    if (h.includes('google.')) return 'google-organic';
+    if (h.includes('bing.')) return 'bing-organic';
+    if (h.includes('duckduckgo.')) return 'duckduckgo-organic';
+    if (h.includes('chat.openai.') || h.includes('chatgpt.')) return 'chatgpt';
+    if (h.includes('perplexity.')) return 'perplexity';
+    if (h.includes('claude.') || h.includes('anthropic.')) return 'claude';
+    if (h.includes('gemini.') || h.includes('bard.')) return 'gemini';
+    if (h.includes(window.location.hostname)) return 'internal';
+    return 'referral-' + h;
+  }
+
+  const attribution = getOrSetFirstTouch();
+
+  const appliedFromUrl = document.getElementById('fc-applied-from-url');
+  if (appliedFromUrl) appliedFromUrl.value = window.location.href;
+
+  function logToSupabase(data) {
+    if (!cfg.supabase) return;
+    const basePayload = {
+      ...data,
+      page_url: window.location.href,
+      applied_from: cfg.appliedFrom,
+      user_agent: navigator.userAgent,
+    };
+    const fullPayload = {
+      ...basePayload,
+      source: inferSource(attribution),
+      landing_path: attribution.landing_path,
+      referrer: attribution.referrer,
+      referrer_host: attribution.referrer_host,
+      utm_source: attribution.utm_source,
+      utm_medium: attribution.utm_medium,
+      utm_campaign: attribution.utm_campaign,
+      utm_term: attribution.utm_term,
+      utm_content: attribution.utm_content,
+      gclid: attribution.gclid,
+      fbclid: attribution.fbclid,
+      msclkid: attribution.msclkid,
+    };
+    const post = (body) =>
+      fetch(`${cfg.supabase.url}/rest/v1/${cfg.supabase.table}`, {
+        method: 'POST',
+        headers: {
+          'apikey': cfg.supabase.anonKey,
+          'Authorization': `Bearer ${cfg.supabase.anonKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify(body),
+      });
+    try {
+      post(fullPayload).then(r => {
+        if (!r.ok) post(basePayload).catch(() => {});
+      }).catch(() => {
+        post(basePayload).catch(() => {});
+      });
+    } catch {}
+  }
+
+  function notifyPartialFill(turnover, industry, financeType, company) {
+    if (!cfg.partialFillEmail) return;
+    try {
+      fetch(`https://formsubmit.co/ajax/${cfg.partialFillEmail}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          _subject: `${cfg.emailSubject} — ${company || 'someone'} started a quote`,
+          _template: 'table',
+          company: company || 'Not entered',
+          turnover, industry, finance_type: financeType,
+          applied_from: cfg.appliedFrom,
+          page_url: window.location.href,
+          note: 'Step 1 complete; not yet submitted. May still be filling step 2.',
+        }),
+      }).catch(() => {});
+    } catch {}
+  }
+
+  function trackEvent(name, params) {
+    if (typeof window.gtag === 'function') window.gtag('event', name, params || {});
+    window.dispatchEvent(new CustomEvent('fc-leadform', { detail: { event: name, ...params } }));
+  }
+
+  trackEvent('form_view', { applied_from: cfg.appliedFrom });
+
+  document.getElementById('fc-next-step')?.addEventListener('click', () => {
+    const turnover = document.getElementById('fc-turnover')?.value;
+    const industry = document.getElementById('fc-industry')?.value;
+    const financeType = document.getElementById('fc-finance-type')?.value;
+    const company = document.getElementById('fc-company')?.value;
+    const companyNumber = document.getElementById('fc-company-number')?.value;
+    if (!turnover || !industry || !financeType || !company || company.length < 2) {
+      alert('Please complete all fields including company name.');
+      return;
+    }
+    document.getElementById('fc-step-1').setAttribute('hidden', '');
+    document.getElementById('fc-step-2').removeAttribute('hidden');
+    trackEvent('form_step_2', { turnover, industry, finance_type: financeType, applied_from: cfg.appliedFrom });
+    logToSupabase({
+      event_type: 'step_1_complete',
+      turnover, industry, finance_type: financeType,
+      company_name: company,
+      company_number: companyNumber || null,
+    });
+    notifyPartialFill(turnover, industry, financeType, company);
+  });
+
+  document.getElementById('fc-prev-step')?.addEventListener('click', () => {
+    document.getElementById('fc-step-2').setAttribute('hidden', '');
+    document.getElementById('fc-step-1').removeAttribute('hidden');
+    trackEvent('form_step_back');
+  });
+
+  let chTimeout;
+  const companyInput = document.getElementById('fc-company');
+  const chResults = document.getElementById('fc-ch-results');
+  const chInfo = document.getElementById('fc-ch-info');
+
+  if (cfg.companiesHouseApiKey) {
+    companyInput?.addEventListener('input', () => {
+      clearTimeout(chTimeout);
+      const q = companyInput.value.trim();
+      if (q.length < 3) { chResults?.setAttribute('hidden', ''); return; }
+      chTimeout = setTimeout(async () => {
+        try {
+          const res = await fetch(`https://api.company-information.service.gov.uk/search/companies?q=${encodeURIComponent(q)}&items_per_page=5`, {
+            headers: { 'Authorization': 'Basic ' + btoa(cfg.companiesHouseApiKey + ':') }
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (!data.items?.length) { chResults?.setAttribute('hidden', ''); return; }
+          chResults.innerHTML = data.items.map(c =>
+            `<div class="fc-leadform__ch-item" data-name="${c.title}" data-number="${c.company_number}" data-status="${c.company_status}">
+              <div class="fc-leadform__ch-name">${c.title}</div>
+              <div class="fc-leadform__ch-meta">${c.company_number} · ${c.company_status} · ${c.address_snippet || ''}</div>
+            </div>`
+          ).join('');
+          chResults.removeAttribute('hidden');
+          chResults.querySelectorAll('.fc-leadform__ch-item').forEach(item => {
+            item.addEventListener('click', () => {
+              const name = item.getAttribute('data-name') || '';
+              const number = item.getAttribute('data-number') || '';
+              const status = item.getAttribute('data-status') || '';
+              companyInput.value = name;
+              document.getElementById('fc-company-number').value = number;
+              document.getElementById('fc-company-status').value = status;
+              chResults.setAttribute('hidden', '');
+              chInfo.textContent = `✓ ${name} (${number}) — ${status}`;
+              chInfo.removeAttribute('hidden');
+              trackEvent('company_selected', { company_name: name, company_number: number });
+            });
+          });
+        } catch {}
+      }, 300);
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#fc-company, #fc-ch-results')) {
+        chResults?.setAttribute('hidden', '');
+      }
+    });
+  }
+
+  const emailInput = document.getElementById('fc-email');
+  const emailError = document.getElementById('fc-email-error');
+  emailInput?.addEventListener('blur', () => {
+    const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.value);
+    if (emailInput.value && !valid) emailError.removeAttribute('hidden');
+    else emailError.setAttribute('hidden', '');
+  });
+  const phoneInput = document.getElementById('fc-phone');
+  const phoneError = document.getElementById('fc-phone-error');
+  phoneInput?.addEventListener('blur', () => {
+    const cleaned = phoneInput.value.replace(/[\s\(\)\-]/g, '');
+    const valid = /^(\+44|0)[1-9]\d{8,10}$/.test(cleaned);
+    if (phoneInput.value && !valid) phoneError.removeAttribute('hidden');
+    else phoneError.setAttribute('hidden', '');
+  });
+
+  const form = document.getElementById('fc-lead-form');
+  let abandonTimer;
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('fc-email').value;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { emailError.removeAttribute('hidden'); return; }
+    const phone = document.getElementById('fc-phone').value.replace(/[\s\(\)\-]/g, '');
+    if (!/^(\+44|0)[1-9]\d{8,10}$/.test(phone)) { phoneError.removeAttribute('hidden'); return; }
+    const company = document.getElementById('fc-company').value;
+    if (!company || company.length < 2) { alert('Please enter your company name.'); return; }
+
+    const fd = new FormData(form);
+    const data = Object.fromEntries(fd);
+    data._subject = cfg.emailSubject;
+    data._template = 'table';
+    data.page_url = window.location.href;
+
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Sending…'; }
+
+    try {
+      const res = await fetch(cfg.submitEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const result = await res.json();
+      if (result.success) {
+        trackEvent('form_submit_success', {
+          company: data.company,
+          turnover: data.turnover,
+          finance_type: data.finance_type,
+          applied_from: cfg.appliedFrom,
+        });
+        clearTimeout(abandonTimer);
+        logToSupabase({
+          event_type: 'form_submit',
+          turnover: data.turnover,
+          industry: data.industry,
+          finance_type: data.finance_type,
+          company_name: data.company,
+          company_number: data.company_number || null,
+          contact_name: data.name,
+          email: data.email,
+          phone: data.phone,
+        });
+        form.innerHTML = cfg.successHTML;
+      } else {
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit application →'; }
+        trackEvent('form_submit_error');
+      }
+    } catch {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit application →'; }
+      trackEvent('form_submit_error');
+    }
+  });
+
+  const observer = new MutationObserver(() => {
+    const step2 = document.getElementById('fc-step-2');
+    if (step2 && !step2.hasAttribute('hidden')) {
+      abandonTimer = setTimeout(() => {
+        const name = document.getElementById('fc-name')?.value;
+        const email = document.getElementById('fc-email')?.value;
+        const turnover = document.getElementById('fc-turnover')?.value;
+        const industry = document.getElementById('fc-industry')?.value;
+        const financeType = document.getElementById('fc-finance-type')?.value;
+        trackEvent('form_abandon_step2', {
+          partial_data: (name || email) ? 'started' : 'none',
+          has_name: name ? 'yes' : 'no',
+          has_email: email ? 'yes' : 'no',
+          applied_from: cfg.appliedFrom,
+        });
+        logToSupabase({
+          event_type: 'form_abandon',
+          turnover: turnover || null,
+          industry: industry || null,
+          finance_type: financeType || null,
+          contact_name: name || null,
+          email: email || null,
+        });
+      }, 300000);
+    } else {
+      clearTimeout(abandonTimer);
+    }
+  });
+  const step2El = document.getElementById('fc-step-2');
+  if (step2El) observer.observe(step2El, { attributes: true, attributeFilter: ['hidden'] });
+</script>
+
+<style>
+  .fc-leadform {
+    background: var(--fc-text);
+    border-radius: var(--fc-radius-lg);
+    padding: var(--fc-sp-10) var(--fc-sp-6);
+    color: white;
+  }
+  @media (min-width: 768px) {
+    .fc-leadform { padding: var(--fc-sp-16) var(--fc-sp-12); }
+  }
+  .fc-leadform__inner { max-width: 32rem; margin: 0 auto; }
+  .fc-leadform__heading {
+    font-family: var(--fc-font-display);
+    font-size: var(--fc-fs-2xl);
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 0 0 var(--fc-sp-2);
+    color: white;
+  }
+  @media (min-width: 768px) {
+    .fc-leadform__heading { font-size: var(--fc-fs-3xl); }
+  }
+  .fc-leadform__sub {
+    color: rgba(255, 255, 255, 0.7);
+    margin: 0 0 var(--fc-sp-8);
+    font-size: var(--fc-fs-sm);
+  }
+  .fc-leadform__form { display: flex; flex-direction: column; }
+  .fc-leadform__step { display: flex; flex-direction: column; gap: var(--fc-sp-4); }
+  .fc-leadform__step[hidden] { display: none; }
+  .fc-leadform__label {
+    font-size: var(--fc-fs-sm);
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.95);
+    margin-bottom: calc(-1 * var(--fc-sp-3));
+  }
+  .fc-leadform__required { color: #fca5a5; }
+  .fc-leadform__input {
+    width: 100%;
+    padding: var(--fc-sp-3) var(--fc-sp-4);
+    border-radius: var(--fc-radius);
+    background: white;
+    color: var(--fc-text);
+    font-family: var(--fc-font-body);
+    font-size: var(--fc-fs-base);
+    border: 1px solid transparent;
+  }
+  .fc-leadform__input:focus { outline: 2px solid var(--fc-accent); outline-offset: 2px; }
+  .fc-leadform__company-wrap { position: relative; }
+  .fc-leadform__ch-results {
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: white;
+    border: 1px solid var(--fc-border);
+    border-radius: var(--fc-radius);
+    margin-top: var(--fc-sp-1);
+    max-height: 12rem; overflow-y: auto; z-index: 10;
+    box-shadow: var(--fc-shadow-lg);
+  }
+  .fc-leadform__ch-results[hidden] { display: none; }
+  .fc-leadform__ch-item {
+    padding: var(--fc-sp-3) var(--fc-sp-4);
+    border-bottom: 1px solid var(--fc-border);
+    cursor: pointer; color: var(--fc-text);
+  }
+  .fc-leadform__ch-item:hover { background: var(--fc-bg-muted); }
+  .fc-leadform__ch-item:last-child { border-bottom: 0; }
+  .fc-leadform__ch-name { font-size: var(--fc-fs-sm); font-weight: 500; color: var(--fc-text); }
+  .fc-leadform__ch-meta { font-size: var(--fc-fs-xs); color: var(--fc-text-subtle); }
+  .fc-leadform__ch-info {
+    font-size: var(--fc-fs-xs);
+    color: rgba(255, 255, 255, 0.7);
+    margin: calc(-1 * var(--fc-sp-2)) 0 0;
+  }
+  .fc-leadform__ch-info[hidden] { display: none; }
+  .fc-leadform__error {
+    font-size: var(--fc-fs-xs);
+    color: #fca5a5;
+    margin: calc(-1 * var(--fc-sp-2)) 0 0;
+  }
+  .fc-leadform__error[hidden] { display: none; }
+  .fc-leadform__cta {
+    width: 100%;
+    margin-top: var(--fc-sp-2);
+    padding: var(--fc-sp-3) var(--fc-sp-6);
+    font-size: var(--fc-fs-base);
+  }
+  .fc-leadform__back {
+    background: transparent; border: 0;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: var(--fc-fs-sm);
+    cursor: pointer;
+    margin-top: var(--fc-sp-2);
+  }
+  .fc-leadform__back:hover { color: white; }
+  .fc-leadform__privacy {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: var(--fc-fs-xs);
+    margin: var(--fc-sp-4) 0 0;
+  }
+  .fc-leadform__privacy a { color: rgba(255, 255, 255, 0.85); text-decoration: underline; }
+  .fc-leadform__pills {
+    margin-top: var(--fc-sp-6);
+    text-align: center;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: var(--fc-fs-xs);
+  }
+  .fc-leadform__sep { color: rgba(255, 255, 255, 0.3); margin: 0 var(--fc-sp-2); }
+</style>
