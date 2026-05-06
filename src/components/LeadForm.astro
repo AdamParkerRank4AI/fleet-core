@@ -50,16 +50,29 @@ interface Props {
   config: LeadFormConfig;
   heading?: string;
   subheading?: string;
+  /** Single line of broker-handoff disclosure shown under the heading. */
+  brokerDisclosure?: string;
   appliedFrom?: string;
+  /** Pre-fill the finance-type dropdown — pass via URL param ?finance_type= */
   defaultFinanceType?: string;
+  /** Pre-fill the industry dropdown — pass via URL param ?industry= */
+  defaultIndustry?: string;
+  /** Pre-fill the turnover dropdown — pass via URL param ?turnover= */
+  defaultTurnover?: string;
+  /** The lender slug a sister-site review routed from. Stamped on the lead but not visible. */
+  lenderContext?: string;
 }
 
 const {
   config,
   heading = "Get matched with the right lender",
   subheading = "Two minutes. No obligation. Soft search only.",
+  brokerDisclosure,
   appliedFrom,
   defaultFinanceType,
+  defaultIndustry,
+  defaultTurnover,
+  lenderContext,
 } = Astro.props;
 
 const resolvedAppliedFrom = appliedFrom || Astro.url.pathname;
@@ -83,23 +96,38 @@ const clientConfig = {
   <div class="fc-leadform__inner">
     <h2 class="fc-leadform__heading">{heading}</h2>
     {subheading && <p class="fc-leadform__sub">{subheading}</p>}
+    {brokerDisclosure && <p class="fc-leadform__disclosure">{brokerDisclosure}</p>}
+
+    <div class="fc-leadform__progress" aria-live="polite">
+      <span>Step <span id="fc-step-num">1</span> of 2</span>
+      <span class="fc-leadform__progress-sep"> · </span>
+      <span>Takes 2 minutes</span>
+    </div>
 
     <form id="fc-lead-form" class="fc-leadform__form" novalidate>
       <input type="hidden" name="applied_from" value={resolvedAppliedFrom} />
       <input type="hidden" name="applied_from_url" id="fc-applied-from-url" />
+      {lenderContext && <input type="hidden" name="lender_context" value={lenderContext} />}
 
+      {/* Step 1: 3 dropdowns only (no typing wall, low friction) */}
       <div id="fc-step-1" class="fc-leadform__step">
         <label class="fc-leadform__label" for="fc-turnover">Annual turnover</label>
         <select id="fc-turnover" name="turnover" required class="fc-leadform__input">
           <option value="">Select</option>
-          {config.turnoverBands.map(b => <option value={b.value}>{b.label}</option>)}
+          {config.turnoverBands.map(b => (
+            <option value={b.value} selected={defaultTurnover === b.value}>{b.label}</option>
+          ))}
         </select>
+        <p id="fc-turnover-error" class="fc-leadform__error" hidden>Please select your turnover.</p>
 
-        <label class="fc-leadform__label" for="fc-industry">Industry / sector</label>
+        <label class="fc-leadform__label" for="fc-industry">Industry or sector</label>
         <select id="fc-industry" name="industry" required class="fc-leadform__input">
           <option value="">Select</option>
-          {config.industries.map(i => <option value={i.value}>{i.label}</option>)}
+          {config.industries.map(i => (
+            <option value={i.value} selected={defaultIndustry === i.value}>{i.label}</option>
+          ))}
         </select>
+        <p id="fc-industry-error" class="fc-leadform__error" hidden>Please select your sector.</p>
 
         <label class="fc-leadform__label" for="fc-finance-type">Type of finance you need</label>
         <select id="fc-finance-type" name="finance_type" required class="fc-leadform__input">
@@ -108,12 +136,18 @@ const clientConfig = {
             <option value={f.value} selected={defaultFinanceType === f.value}>{f.label}</option>
           ))}
         </select>
+        <p id="fc-finance-type-error" class="fc-leadform__error" hidden>Please select a finance type.</p>
 
+        <button type="button" id="fc-next-step" class="fc-btn-primary fc-leadform__cta">Next →</button>
+      </div>
+
+      {/* Step 2: company + contact (identity commitment moved here) */}
+      <div id="fc-step-2" class="fc-leadform__step" hidden>
         <label class="fc-leadform__label" for="fc-company">
           Company name <span class="fc-leadform__required">*</span>
         </label>
         <div class="fc-leadform__company-wrap">
-          <input type="text" id="fc-company" name="company" required autocomplete="off"
+          <input type="text" id="fc-company" name="company" required autocomplete="organization"
             class="fc-leadform__input"
             placeholder="Start typing your registered company name…" />
           <div id="fc-ch-results" class="fc-leadform__ch-results" hidden></div>
@@ -121,23 +155,21 @@ const clientConfig = {
         <input type="hidden" id="fc-company-number" name="company_number" />
         <input type="hidden" id="fc-company-status" name="company_status" />
         <p id="fc-ch-info" class="fc-leadform__ch-info" hidden></p>
+        <p id="fc-company-error" class="fc-leadform__error" hidden>Please enter your company name.</p>
 
-        <button type="button" id="fc-next-step" class="fc-btn-primary fc-leadform__cta">Next →</button>
-      </div>
-
-      <div id="fc-step-2" class="fc-leadform__step" hidden>
         <label class="fc-leadform__label" for="fc-name">Your name <span class="fc-leadform__required">*</span></label>
-        <input type="text" id="fc-name" name="name" required class="fc-leadform__input" placeholder="Full name" />
+        <input type="text" id="fc-name" name="name" required autocomplete="name" class="fc-leadform__input" placeholder="Full name" />
+        <p id="fc-name-error" class="fc-leadform__error" hidden>Please enter your full name.</p>
 
         <label class="fc-leadform__label" for="fc-email">Work email <span class="fc-leadform__required">*</span></label>
-        <input type="email" id="fc-email" name="email" required class="fc-leadform__input" placeholder="you@company.co.uk" />
+        <input type="email" id="fc-email" name="email" required autocomplete="email" inputmode="email" class="fc-leadform__input" placeholder="you@company.co.uk" />
         <p id="fc-email-error" class="fc-leadform__error" hidden>Please enter a valid email address.</p>
 
         <label class="fc-leadform__label" for="fc-phone">Phone <span class="fc-leadform__required">*</span></label>
-        <input type="tel" id="fc-phone" name="phone" required class="fc-leadform__input" placeholder="07xxx xxx xxx" />
+        <input type="tel" id="fc-phone" name="phone" required autocomplete="tel" inputmode="tel" class="fc-leadform__input" placeholder="07xxx xxx xxx" />
         <p id="fc-phone-error" class="fc-leadform__error" hidden>Please enter a valid UK phone number.</p>
 
-        <button type="submit" class="fc-btn-primary fc-leadform__cta">Submit application →</button>
+        <button type="submit" class="fc-btn-primary fc-leadform__cta">See my matches →</button>
         <button type="button" id="fc-prev-step" class="fc-leadform__back">← Back</button>
       </div>
     </form>
@@ -283,32 +315,65 @@ const clientConfig = {
 
   trackEvent('form_view', { applied_from: cfg.appliedFrom });
 
+  // Inline-error helpers (replace alert() — modern UX)
+  function showError(fieldId) {
+    const err = document.getElementById(fieldId + '-error');
+    if (err) err.removeAttribute('hidden');
+    const input = document.getElementById(fieldId);
+    if (input) input.style.borderColor = '#fca5a5';
+  }
+  function clearError(fieldId) {
+    const err = document.getElementById(fieldId + '-error');
+    if (err) err.setAttribute('hidden', '');
+    const input = document.getElementById(fieldId);
+    if (input) input.style.borderColor = '';
+  }
+  function setStep(n) {
+    const num = document.getElementById('fc-step-num');
+    if (num) num.textContent = String(n);
+  }
+
   document.getElementById('fc-next-step')?.addEventListener('click', () => {
     const turnover = document.getElementById('fc-turnover')?.value;
     const industry = document.getElementById('fc-industry')?.value;
     const financeType = document.getElementById('fc-finance-type')?.value;
-    const company = document.getElementById('fc-company')?.value;
-    const companyNumber = document.getElementById('fc-company-number')?.value;
-    if (!turnover || !industry || !financeType || !company || company.length < 2) {
-      alert('Please complete all fields including company name.');
-      return;
-    }
+
+    // Inline validation — clear any prior errors then re-flag
+    let hasError = false;
+    [['fc-turnover', turnover], ['fc-industry', industry], ['fc-finance-type', financeType]].forEach(([id, v]) => {
+      if (!v) { showError(id); hasError = true; } else { clearError(id); }
+    });
+    if (hasError) return;
+
     document.getElementById('fc-step-1').setAttribute('hidden', '');
     document.getElementById('fc-step-2').removeAttribute('hidden');
+    setStep(2);
+    // Focus first field on step 2 for keyboard users
+    document.getElementById('fc-company')?.focus();
+
     trackEvent('form_step_2', { turnover, industry, finance_type: financeType, applied_from: cfg.appliedFrom });
     logToSupabase({
       event_type: 'step_1_complete',
       turnover, industry, finance_type: financeType,
-      company_name: company,
-      company_number: companyNumber || null,
     });
-    notifyPartialFill(turnover, industry, financeType, company);
+    // Step-1 partial-fill notification fires only after step 1 — but we don't have company yet.
+    // Send the email at step 1 with placeholder for company; if they finish, the full-submit email overrides.
+    notifyPartialFill(turnover, industry, financeType, '');
   });
 
   document.getElementById('fc-prev-step')?.addEventListener('click', () => {
     document.getElementById('fc-step-2').setAttribute('hidden', '');
     document.getElementById('fc-step-1').removeAttribute('hidden');
+    setStep(1);
     trackEvent('form_step_back');
+  });
+
+  // Clear inline errors as the user fixes the field
+  ['fc-turnover', 'fc-industry', 'fc-finance-type'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => clearError(id));
+  });
+  ['fc-company', 'fc-name', 'fc-email', 'fc-phone'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', () => clearError(id));
   });
 
   let chTimeout;
@@ -380,17 +445,30 @@ const clientConfig = {
   let abandonTimer;
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const email = document.getElementById('fc-email').value;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { emailError.removeAttribute('hidden'); return; }
-    const phone = document.getElementById('fc-phone').value.replace(/[\s\(\)\-]/g, '');
-    if (!/^(\+44|0)[1-9]\d{8,10}$/.test(phone)) { phoneError.removeAttribute('hidden'); return; }
+
+    let hasError = false;
     const company = document.getElementById('fc-company').value;
-    if (!company || company.length < 2) { alert('Please enter your company name.'); return; }
+    if (!company || company.length < 2) { showError('fc-company'); hasError = true; }
+
+    const name = document.getElementById('fc-name').value;
+    if (!name || name.length < 2) { showError('fc-name'); hasError = true; }
+
+    const email = document.getElementById('fc-email').value;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showError('fc-email'); hasError = true; }
+
+    const phone = document.getElementById('fc-phone').value.replace(/[\s\(\)\-]/g, '');
+    if (!/^(\+44|0)[1-9]\d{8,10}$/.test(phone)) { showError('fc-phone'); hasError = true; }
+
+    if (hasError) return;
 
     const fd = new FormData(form);
     const data = Object.fromEntries(fd);
     data._subject = cfg.emailSubject;
     data._template = 'table';
+    // Auto-acknowledgement to the lead (FormSubmit feature) — sent from cfg.partialFillEmail
+    if (cfg.partialFillEmail) {
+      data._autoresponse = `Thanks. We've received your application and will route it to UK lenders most likely to approve based on your sector and ticket size. Expect to hear from a matched broker within 24 hours.\n\nIf you didn't submit this, ignore this email.`;
+    }
     data.page_url = window.location.href;
 
     // Merge first-touch attribution into the email payload so source / UTM /
@@ -508,9 +586,27 @@ const clientConfig = {
   }
   .fc-leadform__sub {
     color: rgba(255, 255, 255, 0.7);
-    margin: 0 0 var(--fc-sp-8);
+    margin: 0 0 var(--fc-sp-3);
     font-size: var(--fc-fs-sm);
   }
+  .fc-leadform__disclosure {
+    color: rgba(255, 255, 255, 0.55);
+    margin: 0 0 var(--fc-sp-6);
+    font-size: var(--fc-fs-xs);
+    line-height: var(--fc-leading-snug);
+  }
+  .fc-leadform__progress {
+    display: flex;
+    align-items: center;
+    gap: var(--fc-sp-2);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: var(--fc-fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    margin-bottom: var(--fc-sp-4);
+  }
+  .fc-leadform__progress-sep { color: rgba(255, 255, 255, 0.3); }
   .fc-leadform__form { display: flex; flex-direction: column; }
   .fc-leadform__step { display: flex; flex-direction: column; gap: var(--fc-sp-4); }
   .fc-leadform__step[hidden] { display: none; }
