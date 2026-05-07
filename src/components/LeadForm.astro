@@ -36,7 +36,13 @@ export interface LeadFormConfig {
   partialFillEmail?: string;
   emailSubject?: string;
   supabase?: { url: string; anonKey: string; table: string };
-  companiesHouseApiKey?: string;
+  /**
+   * Path to the same-origin Companies House search proxy. The host site MUST
+   * provide a Cloudflare Pages Function at this path that proxies to
+   * api.company-information.service.gov.uk with the API key in `context.env`.
+   * Default: `/api/companies-house/search`. Pass `null` to disable autocomplete.
+   */
+  companiesHouseProxyPath?: string | null;
   industries: FinanceOption[];
   financeTypes: FinanceOption[];
   turnoverBands: FinanceOption[];
@@ -82,7 +88,12 @@ const clientConfig = {
   partialFillEmail: config.partialFillEmail || null,
   emailSubject: config.emailSubject || "New lead",
   supabase: config.supabase || null,
-  companiesHouseApiKey: config.companiesHouseApiKey || null,
+  // Companies House proxy: same-origin Pages Function. `null` disables autocomplete.
+  // Default `/api/companies-house/search` — host site must ship that function.
+  companiesHouseProxyPath:
+    config.companiesHouseProxyPath === null
+      ? null
+      : config.companiesHouseProxyPath || "/api/companies-house/search",
   attributionKey: config.attributionKey || "fc_first_touch",
   appliedFrom: resolvedAppliedFrom,
   successHTML:
@@ -381,16 +392,16 @@ const clientConfig = {
   const chResults = document.getElementById('fc-ch-results');
   const chInfo = document.getElementById('fc-ch-info');
 
-  if (cfg.companiesHouseApiKey) {
+  if (cfg.companiesHouseProxyPath) {
     companyInput?.addEventListener('input', () => {
       clearTimeout(chTimeout);
       const q = companyInput.value.trim();
       if (q.length < 3) { chResults?.setAttribute('hidden', ''); return; }
       chTimeout = setTimeout(async () => {
         try {
-          const res = await fetch(`https://api.company-information.service.gov.uk/search/companies?q=${encodeURIComponent(q)}&items_per_page=5`, {
-            headers: { 'Authorization': 'Basic ' + btoa(cfg.companiesHouseApiKey + ':') }
-          });
+          // Same-origin proxy. Host site's Pages Function holds the API key
+          // in env so it never reaches the client bundle.
+          const res = await fetch(`${cfg.companiesHouseProxyPath}?q=${encodeURIComponent(q)}`);
           if (!res.ok) return;
           const data = await res.json();
           if (!data.items?.length) { chResults?.setAttribute('hidden', ''); return; }
