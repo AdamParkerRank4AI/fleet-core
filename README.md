@@ -75,3 +75,17 @@ Each site tracks the fleet-core version it's on in package.json. The Monday week
 ## Status
 
 `v0.1.0` (initial). Components lifted from MI's canonical versions. Migration of live sites is gated on per-site approval. See `docs/MIGRATION_GUIDE.md`.
+
+## Changelog
+
+### v0.6.2
+
+LeadForm: business postcode is now captured automatically from the Companies House `address.postal_code` field when the user picks a company from autocomplete. Removes the redundant manual postcode input. If the user submits without picking a company (or CH had no postcode for that record), a fallback postcode input is revealed inline and required before submit. Hidden field `business_postcode` still ships in the FormSubmit and Supabase payloads.
+
+### v0.6.1
+
+LeadForm: Companies House search routed via same-origin Pages Function so the API key never reaches the client bundle.
+
+### v0.6.0
+
+LeadForm: conversion-friction fixes (inline errors, 2-step flow tightened, default placeholders).

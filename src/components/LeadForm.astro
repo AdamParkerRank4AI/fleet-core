@@ -10,8 +10,13 @@
  *     captures which page funnelled the user in
  *
  * Two-step form:
- *   Step 1 — turnover, industry, finance type, company name (Companies House autocomplete)
- *   Step 2 — contact name, email, phone (with UK validation)
+ *   Step 1 — turnover, industry, finance type
+ *   Step 2 — company (Companies House autocomplete), contact name, email, phone
+ *
+ * Business postcode is captured automatically from Companies House
+ * `address.postal_code` when the user picks a company from autocomplete. If
+ * the user submits without picking (or CH had no postcode), a fallback
+ * postcode input is revealed inline and required before the form submits.
  *
  * Tracks every meaningful event:
  *   form_view, company_selected, form_step_2, form_step_back,
@@ -165,8 +170,24 @@ const clientConfig = {
         </div>
         <input type="hidden" id="fc-company-number" name="company_number" />
         <input type="hidden" id="fc-company-status" name="company_status" />
+        {/* business_postcode is captured automatically when the user picks a
+            company from Companies House autocomplete (CH returns address.postal_code).
+            If autocomplete is skipped or returns no postcode, this field is revealed
+            on submit so the user can add it manually. */}
+        <input type="hidden" id="fc-business-postcode" name="business_postcode" />
         <p id="fc-ch-info" class="fc-leadform__ch-info" hidden></p>
         <p id="fc-company-error" class="fc-leadform__error" hidden>Please enter your company name.</p>
+
+        <div id="fc-postcode-fallback" class="fc-leadform__postcode-fallback" hidden>
+          <label class="fc-leadform__label" for="fc-business-postcode-visible">
+            Business postcode <span class="fc-leadform__required">*</span>
+          </label>
+          <input type="text" id="fc-business-postcode-visible" autocomplete="postal-code"
+            class="fc-leadform__input" placeholder="e.g. SW1A 1AA"
+            inputmode="text" maxlength="10" />
+          <p id="fc-business-postcode-visible-error" class="fc-leadform__error" hidden>Please enter a valid UK postcode.</p>
+          <p class="fc-leadform__ch-info">We couldn't find your registered address from Companies House. Please add your business postcode.</p>
+        </div>
 
         <label class="fc-leadform__label" for="fc-name">Your name <span class="fc-leadform__required">*</span></label>
         <input type="text" id="fc-name" name="name" required autocomplete="name" class="fc-leadform__input" placeholder="Full name" />
@@ -386,6 +407,20 @@ const clientConfig = {
   ['fc-company', 'fc-name', 'fc-email', 'fc-phone'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', () => clearError(id));
   });
+  // Reset the company error text back to default when the user edits the company
+  // field, so the postcode-prompt message doesn't linger after they fix it.
+  const companyErrEl = document.getElementById('fc-company-error');
+  const COMPANY_ERROR_DEFAULT = companyErrEl ? companyErrEl.textContent : '';
+  document.getElementById('fc-company')?.addEventListener('input', () => {
+    if (companyErrEl) companyErrEl.textContent = COMPANY_ERROR_DEFAULT;
+  });
+  // Clear postcode-visible error as the user types; also keep hidden postcode
+  // in sync so FormData carries the latest value if they don't blur first.
+  document.getElementById('fc-business-postcode-visible')?.addEventListener('input', (e) => {
+    clearError('fc-business-postcode-visible');
+    const hidden = document.getElementById('fc-business-postcode');
+    if (hidden) hidden.value = e.target.value;
+  });
 
   let chTimeout;
   const companyInput = document.getElementById('fc-company');
@@ -405,25 +440,40 @@ const clientConfig = {
           if (!res.ok) return;
           const data = await res.json();
           if (!data.items?.length) { chResults?.setAttribute('hidden', ''); return; }
-          chResults.innerHTML = data.items.map(c =>
-            `<div class="fc-leadform__ch-item" data-name="${c.title}" data-number="${c.company_number}" data-status="${c.company_status}">
+          // CH search response shape: each item has an `address` object with
+          // `postal_code` (plus locality, region, etc.). We pull postal_code at
+          // pick-time so the form ships business_postcode without asking the
+          // user. Escape quotes defensively for the data-* attribute round-trip.
+          const escapeAttr = (s) => String(s || '').replace(/"/g, '&quot;');
+          chResults.innerHTML = data.items.map(c => {
+            const postalCode = (c.address && c.address.postal_code) || '';
+            return `<div class="fc-leadform__ch-item" data-name="${escapeAttr(c.title)}" data-number="${escapeAttr(c.company_number)}" data-status="${escapeAttr(c.company_status)}" data-postcode="${escapeAttr(postalCode)}">
               <div class="fc-leadform__ch-name">${c.title}</div>
               <div class="fc-leadform__ch-meta">${c.company_number} · ${c.company_status} · ${c.address_snippet || ''}</div>
-            </div>`
-          ).join('');
+            </div>`;
+          }).join('');
           chResults.removeAttribute('hidden');
           chResults.querySelectorAll('.fc-leadform__ch-item').forEach(item => {
             item.addEventListener('click', () => {
               const name = item.getAttribute('data-name') || '';
               const number = item.getAttribute('data-number') || '';
               const status = item.getAttribute('data-status') || '';
+              const postcode = item.getAttribute('data-postcode') || '';
               companyInput.value = name;
               document.getElementById('fc-company-number').value = number;
               document.getElementById('fc-company-status').value = status;
+              // Populate the hidden business_postcode from CH address.postal_code.
+              // If CH didn't return a postcode (rare for active UK companies),
+              // leave it empty — the submit-time fallback will prompt the user.
+              const postcodeInput = document.getElementById('fc-business-postcode');
+              if (postcodeInput) postcodeInput.value = postcode;
+              // If the manual fallback was previously revealed, hide it again.
+              const fallback = document.getElementById('fc-postcode-fallback');
+              if (fallback && postcode) fallback.setAttribute('hidden', '');
               chResults.setAttribute('hidden', '');
               chInfo.textContent = `✓ ${name} (${number}) — ${status}`;
               chInfo.removeAttribute('hidden');
-              trackEvent('company_selected', { company_name: name, company_number: number });
+              trackEvent('company_selected', { company_name: name, company_number: number, has_postcode: postcode ? 'yes' : 'no' });
             });
           });
         } catch {}
@@ -454,12 +504,61 @@ const clientConfig = {
 
   const form = document.getElementById('fc-lead-form');
   let abandonTimer;
+  // UK postcode regex — accepts standard formats with or without internal space.
+  // Source: GOV.UK Bulk Data Transfer (BS7666) tolerant variant.
+  const UK_POSTCODE_RE = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;
+
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
 
     let hasError = false;
     const company = document.getElementById('fc-company').value;
     if (!company || company.length < 2) { showError('fc-company'); hasError = true; }
+
+    // Business postcode: should already be populated from CH autocomplete. If
+    // empty (user typed a company without picking, or CH had no postcode for
+    // that record), reveal the manual fallback input and require it.
+    const postcodeHidden = document.getElementById('fc-business-postcode');
+    const postcodeFallback = document.getElementById('fc-postcode-fallback');
+    const postcodeVisible = document.getElementById('fc-business-postcode-visible');
+    const hiddenPostcode = postcodeHidden ? postcodeHidden.value.trim() : '';
+    const visiblePostcode = postcodeVisible ? postcodeVisible.value.trim() : '';
+    // Prefer the visible input if user filled it (covers the case where they
+    // hand-corrected a CH-supplied postcode). Otherwise use the hidden value.
+    const effectivePostcode = visiblePostcode || hiddenPostcode;
+    if (!effectivePostcode) {
+      // Reveal fallback, flag the company field so the user sees the link, and
+      // block submit. The inline note inside the fallback explains why.
+      if (postcodeFallback) postcodeFallback.removeAttribute('hidden');
+      showError('fc-company');
+      const companyErr = document.getElementById('fc-company-error');
+      if (companyErr) companyErr.textContent = "We couldn't find your registered address. Please add your business postcode below.";
+      if (postcodeVisible) postcodeVisible.focus();
+      hasError = true;
+    } else if (!UK_POSTCODE_RE.test(effectivePostcode)) {
+      // We have something but it doesn't look like a UK postcode. Only show
+      // the visible-input error if the fallback is open (i.e. user typed it).
+      if (postcodeFallback && !postcodeFallback.hasAttribute('hidden')) {
+        showError('fc-business-postcode-visible');
+        hasError = true;
+      } else {
+        // Hidden postcode from CH was malformed (very rare). Reveal fallback
+        // and ask the user to confirm.
+        if (postcodeFallback) postcodeFallback.removeAttribute('hidden');
+        if (postcodeVisible) {
+          postcodeVisible.value = effectivePostcode;
+          postcodeVisible.focus();
+        }
+        showError('fc-business-postcode-visible');
+        hasError = true;
+      }
+    } else {
+      // Sync the effective value back into the hidden field so the FormData
+      // payload always carries the final postcode (whether CH-sourced or
+      // user-edited).
+      if (postcodeHidden) postcodeHidden.value = effectivePostcode;
+      clearError('fc-business-postcode-visible');
+    }
 
     const name = document.getElementById('fc-name').value;
     if (!name || name.length < 2) { showError('fc-name'); hasError = true; }
@@ -526,6 +625,7 @@ const clientConfig = {
           finance_type: data.finance_type,
           company_name: data.company,
           company_number: data.company_number || null,
+          business_postcode: data.business_postcode || null,
           contact_name: data.name,
           email: data.email,
           phone: data.phone,
@@ -665,6 +765,12 @@ const clientConfig = {
     margin: calc(-1 * var(--fc-sp-2)) 0 0;
   }
   .fc-leadform__ch-info[hidden] { display: none; }
+  .fc-leadform__postcode-fallback {
+    display: flex;
+    flex-direction: column;
+    gap: var(--fc-sp-4);
+  }
+  .fc-leadform__postcode-fallback[hidden] { display: none; }
   .fc-leadform__error {
     font-size: var(--fc-fs-xs);
     color: #fca5a5;
