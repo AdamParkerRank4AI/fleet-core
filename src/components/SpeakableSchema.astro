@@ -27,10 +27,22 @@ const {
   description,
   site,
   datePublished,
-  dateModified = new Date().toISOString().slice(0, 10),
+  // ISO 8601 with TZ. Date-only inputs are coerced.
+  dateModified: dateModifiedRaw = new Date().toISOString(),
   url,
-  cssSelectors = [".answer-capsule", ".key-takeaway"]
+  // Expanded default cssSelectors per finding #13 (May 2026 research):
+  // - .answer-capsule + .key-takeaway are explicit content classes
+  // - h2 + p:first-of-type captures answer-first passages (Wellows 2026:
+  //   62% of featured AI Overview extracts land in 134-167 word band,
+  //   typically the first paragraph under each H2).
+  // - .answer-first lets editorial mark passages as citation-grade.
+  // Multi-target is allowed by spec. Each target should be <100 words.
+  cssSelectors = [".answer-capsule", ".key-takeaway", ".answer-first", "h2 + p:first-of-type"]
 } = Astro.props;
+
+const dateModified = /^\d{4}-\d{2}-\d{2}$/.test(dateModifiedRaw)
+  ? new Date(dateModifiedRaw + 'T00:00:00Z').toISOString()
+  : dateModifiedRaw;
 
 const siteUrl = site.siteUrl.replace(/\/$/, '');
 const pageUrl = url || new URL(Astro.url.pathname, siteUrl).href;

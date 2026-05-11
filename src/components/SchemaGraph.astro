@@ -26,12 +26,17 @@ const {
   site,
   title,
   description,
-  // ISO 8601 with timezone (full datetime, not date-only). Bing/AI engines
-  // prioritise pages whose dateModified is recent + has TZ. Date-only is
-  // treated as a weaker freshness signal per 2026 sitemap-freshness research.
-  dateModified = new Date().toISOString(),
+  // ISO 8601 with timezone. Date-only inputs ("2026-04-26") are auto-coerced
+  // to full ISO 8601 ("2026-04-26T00:00:00.000Z") so AI engines + Bing
+  // treat the page as a real freshness signal, not a weaker date-only one.
+  dateModified: dateModifiedRaw = new Date().toISOString(),
   extra = []
 } = Astro.props;
+
+// Coerce date-only inputs to ISO 8601 with TZ (without losing accurate inputs).
+const dateModified = /^\d{4}-\d{2}-\d{2}$/.test(dateModifiedRaw)
+  ? new Date(dateModifiedRaw + 'T00:00:00Z').toISOString()
+  : dateModifiedRaw;
 
 const siteUrl = site.siteUrl.replace(/\/$/, '');
 const pageUrl = new URL(Astro.url.pathname, siteUrl).href;
