@@ -26,7 +26,10 @@ const {
   site,
   title,
   description,
-  dateModified = new Date().toISOString().slice(0, 10),
+  // ISO 8601 with timezone (full datetime, not date-only). Bing/AI engines
+  // prioritise pages whose dateModified is recent + has TZ. Date-only is
+  // treated as a weaker freshness signal per 2026 sitemap-freshness research.
+  dateModified = new Date().toISOString(),
   extra = []
 } = Astro.props;
 

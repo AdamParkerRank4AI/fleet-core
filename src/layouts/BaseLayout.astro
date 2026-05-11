@@ -30,7 +30,9 @@ const {
   title,
   description,
   canonical,
-  dateModified = site.defaultDateModified || new Date().toISOString().slice(0, 10),
+  // ISO 8601 with TZ. Bing-2026 distrusts date-only and uniform build-time
+  // stamps. Sites should pass a per-page dateModified from frontmatter.
+  dateModified = site.defaultDateModified || new Date().toISOString(),
   ogImage,
   schemaExtra,
   preLaunch = false,
@@ -42,6 +44,19 @@ const robotsValue = preLaunch
   ? "noindex, nofollow"
   : "index, follow, max-snippet:-1, max-image-preview:large";
 const locale = site.defaultLocale || "en-GB";
+
+// Fleet sister sites for <link rel="related"> (network entity signal —
+// finding #22 from 11 May AI-search research). Auto-excludes the current
+// site to avoid self-reference.
+const FLEET_SISTERS = [
+  { url: "https://www.rank4ai.co.uk/", title: "Rank4AI" },
+  { url: "https://marketinvoice.co.uk/", title: "Market Invoice" },
+  { url: "https://seocompare.co.uk/", title: "SEOCompare" },
+  { url: "https://bestbusinessloans.ai/", title: "Best Business Loans" },
+  { url: "https://fundbiz.co.uk/", title: "FundBiz" },
+];
+const ownHost = new URL(siteUrl).hostname.replace(/^www\./, "");
+const fleetSisters = FLEET_SISTERS.filter(s => !s.url.includes(ownHost));
 ---
 
 <!DOCTYPE html>
@@ -69,6 +84,10 @@ const locale = site.defaultLocale || "en-GB";
     {ogImage && <meta name="twitter:image" content={ogImage} />}
 
     <meta name="robots" content={robotsValue} />
+
+    {fleetSisters.map(s => (
+      <link rel="related" href={s.url} title={s.title} />
+    ))}
 
     <SchemaGraph
       site={site}
