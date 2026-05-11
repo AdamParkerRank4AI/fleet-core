@@ -304,13 +304,38 @@ const clientConfig = {
         },
         body: JSON.stringify(body),
       });
-    try {
-      post(fullPayload).then(r => {
-        if (!r.ok) post(basePayload).catch(() => {});
-      }).catch(() => {
-        post(basePayload).catch(() => {});
-      });
-    } catch {}
+    // 3-tier write: full -> base -> safe (schema-confirmed columns only).
+    // Guarantees a column drift on Supabase can never silently lose a lead.
+    // Closes the Amy-Knight class of bug from MI on 8 May 2026 where a
+    // missing `notes` column 400'd both full and base, and the lead died
+    // in fetch.catch(). The safe tier filters to columns the leadgen schema
+    // is guaranteed to have (the CREATE TABLE in
+    // ~/SUPABASE_MIGRATION_LEADGEN_LEAD_TABLES_2026-05-11.sql).
+    const SAFE_COLUMNS = [
+      'event_type', 'turnover', 'industry', 'finance_type',
+      'company_name', 'company_number', 'business_postcode',
+      'contact_name', 'email', 'phone',
+      'page_url', 'applied_from', 'user_agent',
+      'source', 'landing_path', 'referrer', 'referrer_host',
+      'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+      'gclid', 'fbclid', 'msclkid'
+    ];
+    const safePayload = {};
+    SAFE_COLUMNS.forEach(k => { if (fullPayload[k] !== undefined) safePayload[k] = fullPayload[k]; });
+    (async () => {
+      try {
+        const r1 = await post(fullPayload);
+        if (r1.ok) return;
+        const r2 = await post(basePayload);
+        if (r2.ok) return;
+        const r3 = await post(safePayload);
+        if (r3.ok) return;
+        const err = await r3.text();
+        console.error('[fleet-core LeadForm] Supabase write failed all retries:', r3.status, err);
+      } catch (e) {
+        console.error('[fleet-core LeadForm] Supabase write threw:', e);
+      }
+    })();
   }
 
   function notifyPartialFill(turnover, industry, financeType, company) {
