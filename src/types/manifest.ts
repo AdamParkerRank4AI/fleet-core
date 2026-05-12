@@ -90,6 +90,11 @@ export interface SiteConfig {
    *  in the @graph alongside the primary, all linked to the Organization via
    *  worksFor. Use for multi-founder sites like Rank4AI. */
   additionalAuthors?: AuthorConfig[];
+  /** Optional named expert reviewer with credentials. Renders as a Person on
+   *  the WebPage's reviewedBy property. Per the 2026 NerdWallet/Wirecutter
+   *  pattern: 96% of AI Overview citations come from sources with strong
+   *  E-E-A-T signals + credentialed expert reviewers. */
+  reviewedBy?: AuthorConfig;
   address?: AddressConfig;
 
   topic: string;

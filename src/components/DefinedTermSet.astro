@@ -1,0 +1,72 @@
+---
+/**
+ * DefinedTermSet schema for glossary pages.
+ *
+ * Emits a DefinedTermSet with linked DefinedTerm entries. LLMs extract
+ * `DefinedTerm.description` verbatim for definition queries ("what is X").
+ * Stackmatix 2026 finding: sites with DefinedTerm schema show measurably
+ * higher citation rates for definition queries. The five-schema stack
+ * (Article + FAQPage + BreadcrumbList + DefinedTerm + HowTo) roughly
+ * doubles citation rates vs Article alone.
+ *
+ * Usage on a glossary page:
+ *   <DefinedTermSet
+ *     site={site}
+ *     name="Invoice finance glossary"
+ *     description="UK invoice finance terms defined."
+ *     terms={[
+ *       { term: "Factoring", description: "Sale of unpaid invoices...", url: "/glossary/factoring/" },
+ *       ...
+ *     ]}
+ *   />
+ */
+
+import type { SiteConfig } from "../types/manifest";
+
+export interface DefinedTerm {
+  term: string;
+  description: string;
+  url?: string;
+  abbreviation?: string;
+  inDefinedTermSet?: string;
+}
+
+interface Props {
+  site: SiteConfig;
+  name: string;
+  description?: string;
+  url?: string;
+  terms: DefinedTerm[];
+}
+
+const { site, name, description, url, terms } = Astro.props;
+
+const siteUrl = site.siteUrl.replace(/\/$/, '');
+const setUrl = url || new URL(Astro.url.pathname, siteUrl).href;
+const setId = `${setUrl}#defined-term-set`;
+
+const schema = {
+  "@context": "https://schema.org",
+  "@type": "DefinedTermSet",
+  "@id": setId,
+  "name": name,
+  "url": setUrl,
+  ...(description ? { description } : {}),
+  "inLanguage": "en-GB",
+  "publisher": { "@id": `${siteUrl}/#organization` },
+  "hasDefinedTerm": terms.map(t => {
+    const termUrl = t.url ? (t.url.startsWith("http") ? t.url : `${siteUrl}${t.url}`) : `${setUrl}#${t.term.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+    return {
+      "@type": "DefinedTerm",
+      "@id": termUrl + "#term",
+      "name": t.term,
+      "description": t.description,
+      "url": termUrl,
+      ...(t.abbreviation ? { alternateName: t.abbreviation } : {}),
+      "inDefinedTermSet": { "@id": setId },
+    };
+  }),
+};
+---
+
+<script type="application/ld+json" set:html={JSON.stringify(schema)} />

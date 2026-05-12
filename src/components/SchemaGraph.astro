@@ -121,6 +121,27 @@ const websiteEntity: Record<string, unknown> = {
   "publisher": { "@id": orgId },
 };
 
+// Optional named expert reviewer (#11). Adds a credentialed Person entity
+// to the graph and references it from WebPage.reviewedBy. Per 2026 research,
+// 96% of AI Overview citations come from sources with strong E-E-A-T —
+// surfacing a named reviewer is the most direct trust signal.
+const reviewer = site.reviewedBy
+  ? (() => {
+      const slug = site.reviewedBy.name.toLowerCase().replace(/\s+/g, '-');
+      const id = `${siteUrl}/#reviewer-${slug}`;
+      const entity: Record<string, unknown> = {
+        "@type": "Person",
+        "@id": id,
+        "name": site.reviewedBy.name,
+        "jobTitle": site.reviewedBy.role,
+        ...(site.reviewedBy.knowsAbout?.length ? { knowsAbout: site.reviewedBy.knowsAbout } : {}),
+        ...(site.reviewedBy.sameAs?.length ? { sameAs: site.reviewedBy.sameAs } : {}),
+        ...(site.reviewedBy.bio ? { description: site.reviewedBy.bio } : {}),
+      };
+      return { entity, id };
+    })()
+  : null;
+
 const webpageEntity: Record<string, unknown> = {
   "@type": "WebPage",
   "@id": pageUrl + "#webpage",
@@ -130,11 +151,13 @@ const webpageEntity: Record<string, unknown> = {
   "isPartOf": { "@id": websiteId },
   "about": { "@id": orgId },
   "dateModified": dateModified,
+  ...(reviewer ? { reviewedBy: { "@id": reviewer.id } } : {}),
 };
 
 const graph: Record<string, unknown>[] = [
   personEntity,
   ...additional.map(a => a.entity),
+  ...(reviewer ? [reviewer.entity] : []),
   orgEntity,
   websiteEntity,
   webpageEntity,
