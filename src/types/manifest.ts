@@ -103,6 +103,18 @@ export interface SiteConfig {
 
   credibility?: CredibilityConfig;
 
+  /** Analytics + behavioural tracking. All fields optional; component renders
+   *  nothing when undefined. Populate from each provider's admin UI:
+   *    - GA4: analytics.google.com → Admin → Data Streams → Measurement ID
+   *    - Clarity: clarity.microsoft.com → Settings → Setup → Project ID
+   *    - GTM: tagmanager.google.com → Container ID (GTM-XXXX) if used
+   */
+  tracking?: {
+    ga4?: string;       // e.g. "G-XXXXXXXXXX"
+    clarity?: string;   // e.g. "abcdefghij" (10-char project ID)
+    gtm?: string;       // e.g. "GTM-XXXXXX" (only if using GTM instead of direct gtag)
+  };
+
   brandColorClass?: string;
   defaultLocale?: string;
   defaultDateModified?: string;
