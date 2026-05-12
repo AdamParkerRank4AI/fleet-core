@@ -1,39 +1,48 @@
 ---
 /**
- * LeadForm — fleet-canonical lead capture form.
+ * LeadForm — fleet-canonical lead capture form (v0.7.0 — company-first + tile UI + big tracking).
  *
- * Lifted from MarketInvoice's working production component (350 pages,
- * captures real leads). Adds:
- *   - Site-configurable finance types, industries, turnover bands
- *   - Site-configurable submit endpoint + Supabase table
- *   - Explicit `applied_from` field stamped on every lead so attribution
- *     captures which page funnelled the user in
+ * Why this version:
+ *   - v0.6.x put 3 dropdowns first (low typing friction) but step-2 dropoffs
+ *     left us with demographic data and no way to identify the visitor. We
+ *     now lead with Companies House autocomplete so even a step-1 abandon
+ *     gives us a real UK business (name + number + postcode + status) we
+ *     can search and follow up on.
+ *   - Dropdowns replaced with tile grids (boxes) — better conversion on
+ *     mobile, matches the kind of UI customers expect from modern UK
+ *     business-finance broker funnels.
+ *   - Industry removed entirely. UK lender appetite by sector is routed
+ *     downstream from the broker panel, not by self-selection on the form.
+ *   - Big-tracking blob added to every payload (lead, partial-fill, abandon):
+ *       device, viewport, language, timezone, local_time, returning_visitor,
+ *       visit_count, first_visit_at, last_visit_at, session_count,
+ *       pages_this_session, page_load_at, time_to_first_interaction.
+ *     Plus server-side enrichment (when /api/lead-enrich is mounted on the
+ *     host site): ip, country, city, region, longitude, latitude, timezone,
+ *     asn, asn_org, tls_version, bot_score.
  *
- * Two-step form:
- *   Step 1 — turnover, industry, finance type
- *   Step 2 — company (Companies House autocomplete), contact name, email, phone
+ * Two-step structure (visible to user):
+ *   Step 1 — company (Companies House autocomplete) + 3 tile-grids
+ *             (amount, monthly turnover, what for)
+ *   Step 2 — name + email + phone
  *
- * Business postcode is captured automatically from Companies House
- * `address.postal_code` when the user picks a company from autocomplete. If
- * the user submits without picking (or CH had no postcode), a fallback
- * postcode input is revealed inline and required before the form submits.
+ * Partial-fill email fires immediately on company_selected (so Adam sees a
+ * real UK business name + Companies House # within a second of selection,
+ * even if the user doesn't progress further). Fires at most once per session.
  *
- * Tracks every meaningful event:
- *   form_view, company_selected, form_step_2, form_step_back,
- *   form_abandon_step2 (5 min after entering step 2 with no submit),
- *   form_submit_success / form_submit_error
+ * Drop-off (5-min step-2 abandon) is preserved from v0.6.x; now carries the
+ * full company + tracking blob, not just contact-name + email.
  *
- * Logs to Supabase at: step_1_complete, form_submit, form_abandon.
- * Sends partial-fill email notification when step 1 completes.
- *
- * First-touch attribution stored in sessionStorage (sticky across pages):
- * UTM params, gclid/fbclid/msclkid, referrer + inferred source
- * (google-organic, chatgpt, perplexity, claude, gemini, etc.)
+ * Supabase writes use the 3-tier graceful-degrade pattern from v0.6.x
+ * (full -> base -> safe) so column drift on Supabase can never silently
+ * lose a lead. New tracking fields fall through to FormSubmit email when
+ * they don't map to existing Supabase columns.
  */
 
 interface FinanceOption {
   value: string;
   label: string;
+  description?: string;
 }
 
 export interface LeadFormConfig {
@@ -42,35 +51,50 @@ export interface LeadFormConfig {
   emailSubject?: string;
   supabase?: { url: string; anonKey: string; table: string };
   /**
-   * Path to the same-origin Companies House search proxy. The host site MUST
-   * provide a Cloudflare Pages Function at this path that proxies to
-   * api.company-information.service.gov.uk with the API key in `context.env`.
+   * Path to the same-origin Companies House search proxy.
    * Default: `/api/companies-house/search`. Pass `null` to disable autocomplete.
    */
   companiesHouseProxyPath?: string | null;
-  industries: FinanceOption[];
+  /**
+   * Path to the same-origin server-side enrichment endpoint that returns
+   * Cloudflare-side metadata (ip, country, asn, tls, etc).
+   * Default: `/api/lead-enrich`. Pass `null` to disable enrichment.
+   */
+  enrichPath?: string | null;
+  /** Legacy. Kept on the type for back-compat — we don't render industries any more. */
+  industries?: FinanceOption[];
+  /** Tile options for "what kind of finance" (plain-language labels). */
   financeTypes: FinanceOption[];
+  /** Tile options for monthly turnover bands. */
   turnoverBands: FinanceOption[];
+  /** Tile options for amount-to-borrow bands. */
+  amountBands?: FinanceOption[];
   trustPills?: string[];
   successHTML?: string;
   privacyPath?: string;
   attributionKey?: string;
+  /**
+   * Copy shown under the "Can't find your company?" link when the manual path
+   * is opened. Use this to redirect sole traders on the limited-co-only sites.
+   */
+  cantFindMessage?: string;
 }
 
 interface Props {
   config: LeadFormConfig;
   heading?: string;
   subheading?: string;
-  /** Single line of broker-handoff disclosure shown under the heading. */
   brokerDisclosure?: string;
   appliedFrom?: string;
-  /** Pre-fill the finance-type dropdown — pass via URL param ?finance_type= */
+  /** Pre-fill the finance-type tile — pass via URL param ?finance_type= */
   defaultFinanceType?: string;
-  /** Pre-fill the industry dropdown — pass via URL param ?industry= */
-  defaultIndustry?: string;
-  /** Pre-fill the turnover dropdown — pass via URL param ?turnover= */
+  /** Pre-fill the amount tile — pass via URL param ?amount= */
+  defaultAmount?: string;
+  /** Pre-fill the turnover tile — pass via URL param ?turnover= */
   defaultTurnover?: string;
-  /** The lender slug a sister-site review routed from. Stamped on the lead but not visible. */
+  /** Legacy. Quietly accepted but no longer rendered. */
+  defaultIndustry?: string;
+  /** The lender slug a sister-site review routed from. Stamped on the lead. */
   lenderContext?: string;
 }
 
@@ -81,26 +105,41 @@ const {
   brokerDisclosure,
   appliedFrom,
   defaultFinanceType,
-  defaultIndustry,
+  defaultAmount,
   defaultTurnover,
   lenderContext,
 } = Astro.props;
 
 const resolvedAppliedFrom = appliedFrom || Astro.url.pathname;
 
+// Default amount bands if the host config didn't supply its own. Matches the
+// 5-band shape Adam asked for on 12 May 2026.
+const amountBands = config.amountBands || [
+  { value: "0-10k", label: "Up to £10k" },
+  { value: "10-25k", label: "£10k - 25k" },
+  { value: "25-50k", label: "£25k - 50k" },
+  { value: "50-100k", label: "£50k - 100k" },
+  { value: "100k-plus", label: "£100k +" },
+];
+
 const clientConfig = {
   submitEndpoint: config.submitEndpoint,
   partialFillEmail: config.partialFillEmail || null,
   emailSubject: config.emailSubject || "New lead",
   supabase: config.supabase || null,
-  // Companies House proxy: same-origin Pages Function. `null` disables autocomplete.
-  // Default `/api/companies-house/search` — host site must ship that function.
   companiesHouseProxyPath:
     config.companiesHouseProxyPath === null
       ? null
       : config.companiesHouseProxyPath || "/api/companies-house/search",
+  enrichPath:
+    config.enrichPath === null
+      ? null
+      : config.enrichPath || "/api/lead-enrich",
   attributionKey: config.attributionKey || "fc_first_touch",
   appliedFrom: resolvedAppliedFrom,
+  cantFindMessage:
+    config.cantFindMessage ||
+    "If your business isn't on Companies House (sole trader, partnership of 3 or fewer, or unincorporated) we'll route you to the right form on our broader network.",
   successHTML:
     config.successHTML ||
     '<div class="text-center py-8"><h3 class="text-2xl font-bold mb-2">Thank you</h3><p style="color: rgba(255,255,255,0.7);">We\'ll be in touch within 24 hours.</p></div>',
@@ -125,42 +164,12 @@ const clientConfig = {
       <input type="hidden" name="applied_from_url" id="fc-applied-from-url" />
       {lenderContext && <input type="hidden" name="lender_context" value={lenderContext} />}
 
-      {/* Step 1: 3 dropdowns only (no typing wall, low friction) */}
+      {/* Step 1 — value-capture step. Company first (so abandons still
+          give us a real UK business name + Companies House #), then 3
+          tile-grids (low cognitive load, mobile-first). */}
       <div id="fc-step-1" class="fc-leadform__step">
-        <label class="fc-leadform__label" for="fc-turnover">Annual turnover</label>
-        <select id="fc-turnover" name="turnover" required class="fc-leadform__input">
-          <option value="">Select</option>
-          {config.turnoverBands.map(b => (
-            <option value={b.value} selected={defaultTurnover === b.value}>{b.label}</option>
-          ))}
-        </select>
-        <p id="fc-turnover-error" class="fc-leadform__error" hidden>Please select your turnover.</p>
-
-        <label class="fc-leadform__label" for="fc-industry">Industry or sector</label>
-        <select id="fc-industry" name="industry" required class="fc-leadform__input">
-          <option value="">Select</option>
-          {config.industries.map(i => (
-            <option value={i.value} selected={defaultIndustry === i.value}>{i.label}</option>
-          ))}
-        </select>
-        <p id="fc-industry-error" class="fc-leadform__error" hidden>Please select your sector.</p>
-
-        <label class="fc-leadform__label" for="fc-finance-type">Type of finance you need</label>
-        <select id="fc-finance-type" name="finance_type" required class="fc-leadform__input">
-          <option value="">Select</option>
-          {config.financeTypes.map(f => (
-            <option value={f.value} selected={defaultFinanceType === f.value}>{f.label}</option>
-          ))}
-        </select>
-        <p id="fc-finance-type-error" class="fc-leadform__error" hidden>Please select a finance type.</p>
-
-        <button type="button" id="fc-next-step" class="fc-btn-primary fc-leadform__cta">Next →</button>
-      </div>
-
-      {/* Step 2: company + contact (identity commitment moved here) */}
-      <div id="fc-step-2" class="fc-leadform__step" hidden>
         <label class="fc-leadform__label" for="fc-company">
-          Company name <span class="fc-leadform__required">*</span>
+          Your business <span class="fc-leadform__required">*</span>
         </label>
         <div class="fc-leadform__company-wrap">
           <input type="text" id="fc-company" name="company" required autocomplete="organization"
@@ -170,15 +179,18 @@ const clientConfig = {
         </div>
         <input type="hidden" id="fc-company-number" name="company_number" />
         <input type="hidden" id="fc-company-status" name="company_status" />
-        {/* business_postcode is captured automatically when the user picks a
-            company from Companies House autocomplete (CH returns address.postal_code).
-            If autocomplete is skipped or returns no postcode, this field is revealed
-            on submit so the user can add it manually. */}
         <input type="hidden" id="fc-business-postcode" name="business_postcode" />
         <p id="fc-ch-info" class="fc-leadform__ch-info" hidden></p>
         <p id="fc-company-error" class="fc-leadform__error" hidden>Please enter your company name.</p>
 
-        <div id="fc-postcode-fallback" class="fc-leadform__postcode-fallback" hidden>
+        <button type="button" id="fc-cant-find" class="fc-leadform__cant-find">
+          Can't find your business?
+        </button>
+
+        {/* Manual / unregistered path. Hidden by default. Sites that
+            restrict to limited-cos can use cantFindMessage to redirect. */}
+        <div id="fc-manual-mode" class="fc-leadform__manual" hidden>
+          <p class="fc-leadform__manual-info">{clientConfig.cantFindMessage}</p>
           <label class="fc-leadform__label" for="fc-business-postcode-visible">
             Business postcode <span class="fc-leadform__required">*</span>
           </label>
@@ -186,8 +198,68 @@ const clientConfig = {
             class="fc-leadform__input" placeholder="e.g. SW1A 1AA"
             inputmode="text" maxlength="10" />
           <p id="fc-business-postcode-visible-error" class="fc-leadform__error" hidden>Please enter a valid UK postcode.</p>
-          <p class="fc-leadform__ch-info">We couldn't find your registered address from Companies House. Please add your business postcode.</p>
+          <button type="button" id="fc-back-to-autocomplete" class="fc-leadform__manual-back">
+            ← Try Companies House search again
+          </button>
         </div>
+
+        {/* Tile grid — how much */}
+        <fieldset class="fc-leadform__tile-group">
+          <legend class="fc-leadform__label">
+            How much do you need? <span class="fc-leadform__required">*</span>
+          </legend>
+          <div class="fc-leadform__tiles" data-tile-name="amount">
+            {amountBands.map(b => (
+              <button type="button" class="fc-leadform__tile" data-value={b.value} data-default={defaultAmount === b.value ? "1" : "0"}>
+                <span class="fc-leadform__tile-label">{b.label}</span>
+                {b.description && <span class="fc-leadform__tile-desc">{b.description}</span>}
+              </button>
+            ))}
+          </div>
+          <input type="hidden" id="fc-amount" name="amount" value={defaultAmount || ""} />
+          <p id="fc-amount-error" class="fc-leadform__error" hidden>Please pick an amount.</p>
+        </fieldset>
+
+        {/* Tile grid — monthly turnover */}
+        <fieldset class="fc-leadform__tile-group">
+          <legend class="fc-leadform__label">
+            Estimated monthly turnover <span class="fc-leadform__required">*</span>
+          </legend>
+          <div class="fc-leadform__tiles" data-tile-name="turnover">
+            {config.turnoverBands.map(b => (
+              <button type="button" class="fc-leadform__tile" data-value={b.value} data-default={defaultTurnover === b.value ? "1" : "0"}>
+                <span class="fc-leadform__tile-label">{b.label}</span>
+                {b.description && <span class="fc-leadform__tile-desc">{b.description}</span>}
+              </button>
+            ))}
+          </div>
+          <input type="hidden" id="fc-turnover" name="turnover" value={defaultTurnover || ""} />
+          <p id="fc-turnover-error" class="fc-leadform__error" hidden>Please pick a monthly turnover.</p>
+        </fieldset>
+
+        {/* Tile grid — what for (plain language) */}
+        <fieldset class="fc-leadform__tile-group">
+          <legend class="fc-leadform__label">
+            What's it for? <span class="fc-leadform__required">*</span>
+          </legend>
+          <div class="fc-leadform__tiles fc-leadform__tiles--wide" data-tile-name="finance">
+            {config.financeTypes.map(f => (
+              <button type="button" class="fc-leadform__tile" data-value={f.value} data-default={defaultFinanceType === f.value ? "1" : "0"}>
+                <span class="fc-leadform__tile-label">{f.label}</span>
+                {f.description && <span class="fc-leadform__tile-desc">{f.description}</span>}
+              </button>
+            ))}
+          </div>
+          <input type="hidden" id="fc-finance-type" name="finance_type" value={defaultFinanceType || ""} />
+          <p id="fc-finance-type-error" class="fc-leadform__error" hidden>Please pick what the finance is for.</p>
+        </fieldset>
+
+        <button type="button" id="fc-next-step" class="fc-btn-primary fc-leadform__cta">Next →</button>
+      </div>
+
+      {/* Step 2 — contact only. Identity commitment after company + tiles. */}
+      <div id="fc-step-2" class="fc-leadform__step" hidden>
+        <p class="fc-leadform__step2-recap" id="fc-step2-recap"></p>
 
         <label class="fc-leadform__label" for="fc-name">Your name <span class="fc-leadform__required">*</span></label>
         <input type="text" id="fc-name" name="name" required autocomplete="name" class="fc-leadform__input" placeholder="Full name" />
@@ -221,6 +293,7 @@ const clientConfig = {
 </section>
 
 <script define:vars={{ cfg: clientConfig }}>
+  // --- Attribution (first-touch, sticky for the session) -------------------
   function getOrSetFirstTouch() {
     const KEY = cfg.attributionKey;
     try {
@@ -267,11 +340,145 @@ const clientConfig = {
 
   const attribution = getOrSetFirstTouch();
 
+  // --- Big-tracking blob (client-side device, returning, visit count) -------
+  const VISITS_KEY = cfg.attributionKey + '__visits';
+  function readVisits() {
+    try { return JSON.parse(localStorage.getItem(VISITS_KEY) || '{}'); } catch { return {}; }
+  }
+  function writeVisits(v) {
+    try { localStorage.setItem(VISITS_KEY, JSON.stringify(v)); } catch {}
+  }
+  const visits = readVisits();
+  const nowIso = new Date().toISOString();
+  const prevLastVisit = visits.last_visit_at || null;
+  const prevCount = Number(visits.visit_count || 0);
+  const newVisits = {
+    first_visit_at: visits.first_visit_at || nowIso,
+    last_visit_at: nowIso,
+    visit_count: prevCount + 1,
+  };
+  writeVisits(newVisits);
+  const isReturning = prevCount > 0;
+
+  const SESSION_PAGES_KEY = cfg.attributionKey + '__session_pages';
+  let pagesThisSession = [];
+  try {
+    pagesThisSession = JSON.parse(sessionStorage.getItem(SESSION_PAGES_KEY) || '[]');
+  } catch {}
+  if (pagesThisSession[pagesThisSession.length - 1] !== window.location.pathname) {
+    pagesThisSession.push(window.location.pathname);
+    try { sessionStorage.setItem(SESSION_PAGES_KEY, JSON.stringify(pagesThisSession)); } catch {}
+  }
+
+  const ua = navigator.userAgent || '';
+  function detectDevice() {
+    if (/Mobi|Android|iPhone|iPad|iPod/i.test(ua)) return /iPad|Tablet/i.test(ua) ? 'tablet' : 'mobile';
+    return 'desktop';
+  }
+  function detectBrowser() {
+    if (/Edg\//.test(ua)) return 'edge';
+    if (/Chrome\//.test(ua) && !/Edg\//.test(ua)) return 'chrome';
+    if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) return 'safari';
+    if (/Firefox\//.test(ua)) return 'firefox';
+    return 'other';
+  }
+  function detectOs() {
+    if (/Windows/i.test(ua)) return 'windows';
+    if (/Mac OS X|Macintosh/i.test(ua)) return 'macos';
+    if (/Android/i.test(ua)) return 'android';
+    if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
+    if (/Linux/i.test(ua)) return 'linux';
+    return 'other';
+  }
+  const clientBlob = {
+    device_type: detectDevice(),
+    browser: detectBrowser(),
+    os: detectOs(),
+    viewport_w: window.innerWidth,
+    viewport_h: window.innerHeight,
+    screen_w: window.screen?.width || null,
+    screen_h: window.screen?.height || null,
+    language: navigator.language || null,
+    languages: (navigator.languages || []).slice(0, 3).join(','),
+    timezone: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return null; } })(),
+    local_time: new Date().toString(),
+    returning_visitor: isReturning ? 'yes' : 'no',
+    visit_count: newVisits.visit_count,
+    first_visit_at: newVisits.first_visit_at,
+    last_visit_at_previous: prevLastVisit,
+    pages_this_session: pagesThisSession.join(' -> '),
+    pages_this_session_count: pagesThisSession.length,
+    page_load_at: nowIso,
+  };
+
+  // --- Server-side enrichment (Cloudflare-side IP / geo / ASN) -------------
+  // Fired once on page-script-init, cached for the session. Falls back
+  // silently if the host site doesn't ship /api/lead-enrich.
+  let serverEnrich = null;
+  const ENRICH_KEY = cfg.attributionKey + '__enrich';
+  try {
+    const cached = sessionStorage.getItem(ENRICH_KEY);
+    if (cached) serverEnrich = JSON.parse(cached);
+  } catch {}
+  (async () => {
+    if (serverEnrich || !cfg.enrichPath) return;
+    try {
+      const r = await fetch(cfg.enrichPath, { method: 'GET' });
+      if (!r.ok) return;
+      serverEnrich = await r.json();
+      try { sessionStorage.setItem(ENRICH_KEY, JSON.stringify(serverEnrich)); } catch {}
+    } catch {}
+  })();
+
+  // Page interaction timer — captures how long it took from page load to
+  // first form interaction (good signal of intent vs accidental click).
+  const pageLoadAt = Date.now();
+  let firstInteractionMs = null;
+  const markInteraction = () => { if (firstInteractionMs === null) firstInteractionMs = Date.now() - pageLoadAt; };
+
+  // --- Applied-from URL hidden field ---------------------------------------
   const appliedFromUrl = document.getElementById('fc-applied-from-url');
   if (appliedFromUrl) appliedFromUrl.value = window.location.href;
 
+  // --- Common payload builder ----------------------------------------------
+  function buildAttributionBlob() {
+    return {
+      lead_source: inferSource(attribution),
+      landing_path: attribution.landing_path || '',
+      landing_url: attribution.landing_url || '',
+      referrer: attribution.referrer || '(direct)',
+      referrer_host: attribution.referrer_host || '',
+      utm_source: attribution.utm_source || '',
+      utm_medium: attribution.utm_medium || '',
+      utm_campaign: attribution.utm_campaign || '',
+      utm_term: attribution.utm_term || '',
+      utm_content: attribution.utm_content || '',
+      gclid: attribution.gclid || '',
+      fbclid: attribution.fbclid || '',
+      msclkid: attribution.msclkid || '',
+      session_started_at: attribution.session_started_at || '',
+      // client blob
+      ...clientBlob,
+      time_to_first_interaction_ms: firstInteractionMs,
+      // server enrich (may be null if /api/lead-enrich isn't deployed yet)
+      ip: serverEnrich?.ip || '',
+      country: serverEnrich?.country || '',
+      city: serverEnrich?.city || '',
+      region: serverEnrich?.region || '',
+      longitude: serverEnrich?.longitude || '',
+      latitude: serverEnrich?.latitude || '',
+      cf_timezone: serverEnrich?.timezone || '',
+      asn: serverEnrich?.asn || '',
+      asn_org: serverEnrich?.asn_org || '',
+      tls_version: serverEnrich?.tls_version || '',
+      bot_score: serverEnrich?.bot_score ?? '',
+    };
+  }
+
+  // --- Supabase writer (3-tier graceful-degrade) ---------------------------
   function logToSupabase(data) {
     if (!cfg.supabase) return;
+    const attrBlob = buildAttributionBlob();
     const basePayload = {
       ...data,
       page_url: window.location.href,
@@ -280,18 +487,26 @@ const clientConfig = {
     };
     const fullPayload = {
       ...basePayload,
-      source: inferSource(attribution),
-      landing_path: attribution.landing_path,
-      referrer: attribution.referrer,
-      referrer_host: attribution.referrer_host,
-      utm_source: attribution.utm_source,
-      utm_medium: attribution.utm_medium,
-      utm_campaign: attribution.utm_campaign,
-      utm_term: attribution.utm_term,
-      utm_content: attribution.utm_content,
-      gclid: attribution.gclid,
-      fbclid: attribution.fbclid,
-      msclkid: attribution.msclkid,
+      source: attrBlob.lead_source,
+      landing_path: attrBlob.landing_path,
+      referrer: attrBlob.referrer,
+      referrer_host: attrBlob.referrer_host,
+      utm_source: attrBlob.utm_source,
+      utm_medium: attrBlob.utm_medium,
+      utm_campaign: attrBlob.utm_campaign,
+      utm_term: attrBlob.utm_term,
+      utm_content: attrBlob.utm_content,
+      gclid: attrBlob.gclid,
+      fbclid: attrBlob.fbclid,
+      msclkid: attrBlob.msclkid,
+      // New enrichment fields (will fall through to safe-write if columns
+      // don't exist on the table yet).
+      ip: attrBlob.ip,
+      country: attrBlob.country,
+      device_type: attrBlob.device_type,
+      returning_visitor: attrBlob.returning_visitor,
+      visit_count: attrBlob.visit_count,
+      asn_org: attrBlob.asn_org,
     };
     const post = (body) =>
       fetch(`${cfg.supabase.url}/rest/v1/${cfg.supabase.table}`, {
@@ -304,15 +519,10 @@ const clientConfig = {
         },
         body: JSON.stringify(body),
       });
-    // 3-tier write: full -> base -> safe (schema-confirmed columns only).
-    // Guarantees a column drift on Supabase can never silently lose a lead.
-    // Closes the Amy-Knight class of bug from MI on 8 May 2026 where a
-    // missing `notes` column 400'd both full and base, and the lead died
-    // in fetch.catch(). The safe tier filters to columns the leadgen schema
-    // is guaranteed to have (the CREATE TABLE in
-    // ~/SUPABASE_MIGRATION_LEADGEN_LEAD_TABLES_2026-05-11.sql).
+    // 3-tier write to survive schema drift. Closes the Amy-Knight class of
+    // bug (8 May 2026): missing column shouldn't lose the lead.
     const SAFE_COLUMNS = [
-      'event_type', 'turnover', 'industry', 'finance_type',
+      'event_type', 'turnover', 'finance_type',
       'company_name', 'company_number', 'business_postcode',
       'contact_name', 'email', 'phone',
       'page_url', 'applied_from', 'user_agent',
@@ -338,41 +548,44 @@ const clientConfig = {
     })();
   }
 
-  function notifyPartialFill(turnover, industry, financeType, company) {
-    if (!cfg.partialFillEmail) return;
+  // --- Partial-fill email (fires on company_selected, max once per session)
+  let partialEmailSent = false;
+  function sendPartialFillEmail(extraNote) {
+    if (partialEmailSent || !cfg.partialFillEmail) return;
+    partialEmailSent = true;
+    const attrBlob = buildAttributionBlob();
+    const company = document.getElementById('fc-company')?.value || '';
+    const companyNumber = document.getElementById('fc-company-number')?.value || '';
+    const amount = document.getElementById('fc-amount')?.value || '';
+    const turnover = document.getElementById('fc-turnover')?.value || '';
+    const financeType = document.getElementById('fc-finance-type')?.value || '';
     try {
       fetch(`https://formsubmit.co/ajax/${cfg.partialFillEmail}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
-          _subject: `${cfg.emailSubject} — ${company || 'someone'} started a quote`,
+          _subject: `${cfg.emailSubject} - ${company || 'unknown'} (partial fill)`,
           _template: 'table',
           company: company || 'Not entered',
-          turnover, industry, finance_type: financeType,
+          company_number: companyNumber,
+          amount, turnover, finance_type: financeType,
           applied_from: cfg.appliedFrom,
           page_url: window.location.href,
-          // Attribution carries through to partial-fill notifications too
-          lead_source: inferSource(attribution),
-          landing_path: attribution.landing_path || '',
-          referrer: attribution.referrer || '(direct)',
-          utm_source: attribution.utm_source || '',
-          utm_campaign: attribution.utm_campaign || '',
-          gclid: attribution.gclid || '',
-          fbclid: attribution.fbclid || '',
-          note: 'Step 1 complete; not yet submitted. May still be filling step 2.',
+          note: extraNote || 'Company selected but full submit not yet received.',
+          ...attrBlob,
         }),
       }).catch(() => {});
     } catch {}
   }
 
+  // --- gtag + custom-event hook --------------------------------------------
   function trackEvent(name, params) {
     if (typeof window.gtag === 'function') window.gtag('event', name, params || {});
     window.dispatchEvent(new CustomEvent('fc-leadform', { detail: { event: name, ...params } }));
   }
-
   trackEvent('form_view', { applied_from: cfg.appliedFrom });
 
-  // Inline-error helpers (replace alert() — modern UX)
+  // --- Inline-error helpers ------------------------------------------------
   function showError(fieldId) {
     const err = document.getElementById(fieldId + '-error');
     if (err) err.removeAttribute('hidden');
@@ -390,32 +603,70 @@ const clientConfig = {
     if (num) num.textContent = String(n);
   }
 
+  // --- Tile selection ------------------------------------------------------
+  function bindTileGroup(name, hiddenId) {
+    const group = document.querySelector(`[data-tile-name="${name}"]`);
+    if (!group) return;
+    const hidden = document.getElementById(hiddenId);
+    const tiles = group.querySelectorAll('.fc-leadform__tile');
+    // Apply default selection if set.
+    tiles.forEach(t => {
+      if (t.getAttribute('data-default') === '1') {
+        t.classList.add('fc-leadform__tile--selected');
+        if (hidden) hidden.value = t.getAttribute('data-value') || '';
+      }
+    });
+    tiles.forEach(t => {
+      t.addEventListener('click', () => {
+        markInteraction();
+        tiles.forEach(o => o.classList.remove('fc-leadform__tile--selected'));
+        t.classList.add('fc-leadform__tile--selected');
+        if (hidden) hidden.value = t.getAttribute('data-value') || '';
+        clearError(hiddenId);
+        trackEvent('tile_selected', { group: name, value: hidden ? hidden.value : null });
+      });
+    });
+  }
+  bindTileGroup('amount', 'fc-amount');
+  bindTileGroup('turnover', 'fc-turnover');
+  bindTileGroup('finance', 'fc-finance-type');
+
+  // --- Step-1 → step-2 transition ------------------------------------------
   document.getElementById('fc-next-step')?.addEventListener('click', () => {
+    markInteraction();
+    const company = document.getElementById('fc-company')?.value;
+    const amount = document.getElementById('fc-amount')?.value;
     const turnover = document.getElementById('fc-turnover')?.value;
-    const industry = document.getElementById('fc-industry')?.value;
     const financeType = document.getElementById('fc-finance-type')?.value;
 
-    // Inline validation — clear any prior errors then re-flag
     let hasError = false;
-    [['fc-turnover', turnover], ['fc-industry', industry], ['fc-finance-type', financeType]].forEach(([id, v]) => {
-      if (!v) { showError(id); hasError = true; } else { clearError(id); }
-    });
+    if (!company || company.length < 2) { showError('fc-company'); hasError = true; }
+    if (!amount) { showError('fc-amount'); hasError = true; }
+    if (!turnover) { showError('fc-turnover'); hasError = true; }
+    if (!financeType) { showError('fc-finance-type'); hasError = true; }
     if (hasError) return;
+
+    // Step-2 recap so the user sees what they picked before adding contact.
+    const recap = document.getElementById('fc-step2-recap');
+    if (recap) {
+      recap.textContent = `Matching ${company} • ${amount} • ${turnover}/mo • ${financeType}`;
+    }
 
     document.getElementById('fc-step-1').setAttribute('hidden', '');
     document.getElementById('fc-step-2').removeAttribute('hidden');
     setStep(2);
-    // Focus first field on step 2 for keyboard users
-    document.getElementById('fc-company')?.focus();
+    document.getElementById('fc-name')?.focus();
 
-    trackEvent('form_step_2', { turnover, industry, finance_type: financeType, applied_from: cfg.appliedFrom });
+    trackEvent('form_step_2', { company, amount, turnover, finance_type: financeType, applied_from: cfg.appliedFrom });
     logToSupabase({
       event_type: 'step_1_complete',
-      turnover, industry, finance_type: financeType,
+      turnover, finance_type: financeType,
+      company_name: company,
+      company_number: document.getElementById('fc-company-number')?.value || null,
+      business_postcode: document.getElementById('fc-business-postcode')?.value || null,
     });
-    // Step-1 partial-fill notification fires only after step 1 — but we don't have company yet.
-    // Send the email at step 1 with placeholder for company; if they finish, the full-submit email overrides.
-    notifyPartialFill(turnover, industry, financeType, '');
+    // Partial-fill email fires on step-1 complete (idempotent — same as company_selected).
+    sendPartialFillEmail('Step 1 complete, contact details not yet entered.');
   });
 
   document.getElementById('fc-prev-step')?.addEventListener('click', () => {
@@ -425,28 +676,35 @@ const clientConfig = {
     trackEvent('form_step_back');
   });
 
-  // Clear inline errors as the user fixes the field
-  ['fc-turnover', 'fc-industry', 'fc-finance-type'].forEach(id => {
-    document.getElementById(id)?.addEventListener('change', () => clearError(id));
+  // --- "Can't find your business?" → manual mode ---------------------------
+  const manualMode = document.getElementById('fc-manual-mode');
+  const companyInputEl = document.getElementById('fc-company');
+  document.getElementById('fc-cant-find')?.addEventListener('click', () => {
+    if (manualMode) manualMode.removeAttribute('hidden');
+    document.getElementById('fc-cant-find').style.display = 'none';
+    if (companyInputEl) companyInputEl.placeholder = "Trading name (we won't validate this against Companies House)";
+    trackEvent('cant_find_company_opened');
   });
-  ['fc-company', 'fc-name', 'fc-email', 'fc-phone'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', () => clearError(id));
+  document.getElementById('fc-back-to-autocomplete')?.addEventListener('click', () => {
+    if (manualMode) manualMode.setAttribute('hidden', '');
+    const cantFindBtn = document.getElementById('fc-cant-find');
+    if (cantFindBtn) cantFindBtn.style.display = '';
+    if (companyInputEl) companyInputEl.placeholder = "Start typing your registered company name…";
+    trackEvent('cant_find_company_back');
   });
-  // Reset the company error text back to default when the user edits the company
-  // field, so the postcode-prompt message doesn't linger after they fix it.
-  const companyErrEl = document.getElementById('fc-company-error');
-  const COMPANY_ERROR_DEFAULT = companyErrEl ? companyErrEl.textContent : '';
-  document.getElementById('fc-company')?.addEventListener('input', () => {
-    if (companyErrEl) companyErrEl.textContent = COMPANY_ERROR_DEFAULT;
-  });
-  // Clear postcode-visible error as the user types; also keep hidden postcode
-  // in sync so FormData carries the latest value if they don't blur first.
+  // Mirror the visible postcode input into the hidden field.
   document.getElementById('fc-business-postcode-visible')?.addEventListener('input', (e) => {
     clearError('fc-business-postcode-visible');
     const hidden = document.getElementById('fc-business-postcode');
     if (hidden) hidden.value = e.target.value;
   });
 
+  // --- Field-level error-clearers ------------------------------------------
+  ['fc-company', 'fc-name', 'fc-email', 'fc-phone'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', () => { markInteraction(); clearError(id); });
+  });
+
+  // --- Companies House autocomplete ----------------------------------------
   let chTimeout;
   const companyInput = document.getElementById('fc-company');
   const chResults = document.getElementById('fc-ch-results');
@@ -454,21 +712,16 @@ const clientConfig = {
 
   if (cfg.companiesHouseProxyPath) {
     companyInput?.addEventListener('input', () => {
+      markInteraction();
       clearTimeout(chTimeout);
       const q = companyInput.value.trim();
       if (q.length < 3) { chResults?.setAttribute('hidden', ''); return; }
       chTimeout = setTimeout(async () => {
         try {
-          // Same-origin proxy. Host site's Pages Function holds the API key
-          // in env so it never reaches the client bundle.
           const res = await fetch(`${cfg.companiesHouseProxyPath}?q=${encodeURIComponent(q)}`);
           if (!res.ok) return;
           const data = await res.json();
           if (!data.items?.length) { chResults?.setAttribute('hidden', ''); return; }
-          // CH search response shape: each item has an `address` object with
-          // `postal_code` (plus locality, region, etc.). We pull postal_code at
-          // pick-time so the form ships business_postcode without asking the
-          // user. Escape quotes defensively for the data-* attribute round-trip.
           const escapeAttr = (s) => String(s || '').replace(/"/g, '&quot;');
           chResults.innerHTML = data.items.map(c => {
             const postalCode = (c.address && c.address.postal_code) || '';
@@ -487,18 +740,22 @@ const clientConfig = {
               companyInput.value = name;
               document.getElementById('fc-company-number').value = number;
               document.getElementById('fc-company-status').value = status;
-              // Populate the hidden business_postcode from CH address.postal_code.
-              // If CH didn't return a postcode (rare for active UK companies),
-              // leave it empty — the submit-time fallback will prompt the user.
               const postcodeInput = document.getElementById('fc-business-postcode');
               if (postcodeInput) postcodeInput.value = postcode;
-              // If the manual fallback was previously revealed, hide it again.
-              const fallback = document.getElementById('fc-postcode-fallback');
-              if (fallback && postcode) fallback.setAttribute('hidden', '');
               chResults.setAttribute('hidden', '');
               chInfo.textContent = `✓ ${name} (${number}) — ${status}`;
               chInfo.removeAttribute('hidden');
               trackEvent('company_selected', { company_name: name, company_number: number, has_postcode: postcode ? 'yes' : 'no' });
+              logToSupabase({
+                event_type: 'company_selected',
+                company_name: name,
+                company_number: number,
+                business_postcode: postcode || null,
+              });
+              // The key drop-off-recovery move: fire partial-fill email the
+              // instant we know the business identity, before the user has
+              // any chance to bail.
+              sendPartialFillEmail('Company selected — earliest possible capture point.');
             });
           });
         } catch {}
@@ -511,6 +768,7 @@ const clientConfig = {
     });
   }
 
+  // --- Email + phone soft validation ---------------------------------------
   const emailInput = document.getElementById('fc-email');
   const emailError = document.getElementById('fc-email-error');
   emailInput?.addEventListener('blur', () => {
@@ -527,103 +785,55 @@ const clientConfig = {
     else phoneError.setAttribute('hidden', '');
   });
 
+  // --- Submit --------------------------------------------------------------
   const form = document.getElementById('fc-lead-form');
   let abandonTimer;
-  // UK postcode regex — accepts standard formats with or without internal space.
-  // Source: GOV.UK Bulk Data Transfer (BS7666) tolerant variant.
   const UK_POSTCODE_RE = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;
 
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
 
     let hasError = false;
-    const company = document.getElementById('fc-company').value;
-    if (!company || company.length < 2) { showError('fc-company'); hasError = true; }
-
-    // Business postcode: should already be populated from CH autocomplete. If
-    // empty (user typed a company without picking, or CH had no postcode for
-    // that record), reveal the manual fallback input and require it.
-    const postcodeHidden = document.getElementById('fc-business-postcode');
-    const postcodeFallback = document.getElementById('fc-postcode-fallback');
-    const postcodeVisible = document.getElementById('fc-business-postcode-visible');
-    const hiddenPostcode = postcodeHidden ? postcodeHidden.value.trim() : '';
-    const visiblePostcode = postcodeVisible ? postcodeVisible.value.trim() : '';
-    // Prefer the visible input if user filled it (covers the case where they
-    // hand-corrected a CH-supplied postcode). Otherwise use the hidden value.
-    const effectivePostcode = visiblePostcode || hiddenPostcode;
-    if (!effectivePostcode) {
-      // Reveal fallback, flag the company field so the user sees the link, and
-      // block submit. The inline note inside the fallback explains why.
-      if (postcodeFallback) postcodeFallback.removeAttribute('hidden');
-      showError('fc-company');
-      const companyErr = document.getElementById('fc-company-error');
-      if (companyErr) companyErr.textContent = "We couldn't find your registered address. Please add your business postcode below.";
-      if (postcodeVisible) postcodeVisible.focus();
-      hasError = true;
-    } else if (!UK_POSTCODE_RE.test(effectivePostcode)) {
-      // We have something but it doesn't look like a UK postcode. Only show
-      // the visible-input error if the fallback is open (i.e. user typed it).
-      if (postcodeFallback && !postcodeFallback.hasAttribute('hidden')) {
-        showError('fc-business-postcode-visible');
-        hasError = true;
-      } else {
-        // Hidden postcode from CH was malformed (very rare). Reveal fallback
-        // and ask the user to confirm.
-        if (postcodeFallback) postcodeFallback.removeAttribute('hidden');
-        if (postcodeVisible) {
-          postcodeVisible.value = effectivePostcode;
-          postcodeVisible.focus();
-        }
-        showError('fc-business-postcode-visible');
-        hasError = true;
-      }
-    } else {
-      // Sync the effective value back into the hidden field so the FormData
-      // payload always carries the final postcode (whether CH-sourced or
-      // user-edited).
-      if (postcodeHidden) postcodeHidden.value = effectivePostcode;
-      clearError('fc-business-postcode-visible');
-    }
-
     const name = document.getElementById('fc-name').value;
     if (!name || name.length < 2) { showError('fc-name'); hasError = true; }
-
     const email = document.getElementById('fc-email').value;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showError('fc-email'); hasError = true; }
-
     const phone = document.getElementById('fc-phone').value.replace(/[\s\(\)\-]/g, '');
     if (!/^(\+44|0)[1-9]\d{8,10}$/.test(phone)) { showError('fc-phone'); hasError = true; }
-
     if (hasError) return;
+
+    // Postcode discipline — should already be populated from CH autocomplete
+    // or the manual visible-input. If missing, prompt with the manual mode.
+    const postcodeHidden = document.getElementById('fc-business-postcode');
+    const postcodeVisible = document.getElementById('fc-business-postcode-visible');
+    const effective = (postcodeVisible?.value || postcodeHidden?.value || '').trim();
+    if (!effective) {
+      if (manualMode) manualMode.removeAttribute('hidden');
+      document.getElementById('fc-cant-find').style.display = 'none';
+      showError('fc-business-postcode-visible');
+      postcodeVisible?.focus();
+      return;
+    } else if (!UK_POSTCODE_RE.test(effective)) {
+      if (manualMode) manualMode.removeAttribute('hidden');
+      document.getElementById('fc-cant-find').style.display = 'none';
+      showError('fc-business-postcode-visible');
+      postcodeVisible?.focus();
+      return;
+    } else if (postcodeHidden) {
+      postcodeHidden.value = effective;
+    }
 
     const fd = new FormData(form);
     const data = Object.fromEntries(fd);
     data._subject = cfg.emailSubject;
     data._template = 'table';
-    // Auto-acknowledgement to the lead (FormSubmit feature) — sent from cfg.partialFillEmail
     if (cfg.partialFillEmail) {
       data._autoresponse = `Thanks. We've received your application and will route it to UK lenders most likely to approve based on your sector and ticket size. Expect to hear from a matched broker within 24 hours.\n\nIf you didn't submit this, ignore this email.`;
     }
     data.page_url = window.location.href;
 
-    // Merge first-touch attribution into the email payload so source / UTM /
-    // referrer / click IDs are visible in the lead email even when Supabase
-    // logging isn't configured. Fields are intentionally human-readable for
-    // FormSubmit's table template.
-    const inferredSource = inferSource(attribution);
-    data.lead_source = inferredSource;
-    data.landing_path = attribution.landing_path || '';
-    data.referrer = attribution.referrer || '(direct)';
-    data.referrer_host = attribution.referrer_host || '';
-    data.utm_source = attribution.utm_source || '';
-    data.utm_medium = attribution.utm_medium || '';
-    data.utm_campaign = attribution.utm_campaign || '';
-    data.utm_term = attribution.utm_term || '';
-    data.utm_content = attribution.utm_content || '';
-    data.gclid = attribution.gclid || '';
-    data.fbclid = attribution.fbclid || '';
-    data.msclkid = attribution.msclkid || '';
-    data.session_started_at = attribution.session_started_at || '';
+    // Big-tracking blob — every email path gets this now (lead, partial, abandon).
+    Object.assign(data, buildAttributionBlob());
 
     const submitBtn = form.querySelector('button[type="submit"]');
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Sending…'; }
@@ -638,6 +848,7 @@ const clientConfig = {
       if (result.success) {
         trackEvent('form_submit_success', {
           company: data.company,
+          amount: data.amount,
           turnover: data.turnover,
           finance_type: data.finance_type,
           applied_from: cfg.appliedFrom,
@@ -646,7 +857,6 @@ const clientConfig = {
         logToSupabase({
           event_type: 'form_submit',
           turnover: data.turnover,
-          industry: data.industry,
           finance_type: data.finance_type,
           company_name: data.company,
           company_number: data.company_number || null,
@@ -657,23 +867,27 @@ const clientConfig = {
         });
         form.innerHTML = cfg.successHTML;
       } else {
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit application →'; }
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'See my matches →'; }
         trackEvent('form_submit_error');
       }
     } catch {
-      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit application →'; }
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'See my matches →'; }
       trackEvent('form_submit_error');
     }
   });
 
+  // --- 5-min step-2 abandon — fires email + Supabase row -------------------
   const observer = new MutationObserver(() => {
     const step2 = document.getElementById('fc-step-2');
     if (step2 && !step2.hasAttribute('hidden')) {
       abandonTimer = setTimeout(() => {
+        const company = document.getElementById('fc-company')?.value;
+        const companyNumber = document.getElementById('fc-company-number')?.value;
         const name = document.getElementById('fc-name')?.value;
         const email = document.getElementById('fc-email')?.value;
+        const phone = document.getElementById('fc-phone')?.value;
+        const amount = document.getElementById('fc-amount')?.value;
         const turnover = document.getElementById('fc-turnover')?.value;
-        const industry = document.getElementById('fc-industry')?.value;
         const financeType = document.getElementById('fc-finance-type')?.value;
         trackEvent('form_abandon_step2', {
           partial_data: (name || email) ? 'started' : 'none',
@@ -684,11 +898,39 @@ const clientConfig = {
         logToSupabase({
           event_type: 'form_abandon',
           turnover: turnover || null,
-          industry: industry || null,
           finance_type: financeType || null,
+          company_name: company || null,
+          company_number: companyNumber || null,
           contact_name: name || null,
           email: email || null,
+          phone: phone || null,
         });
+        // Email Adam the abandon — full blob, so he can manually call.
+        if (cfg.partialFillEmail) {
+          const attrBlob = buildAttributionBlob();
+          try {
+            fetch(`https://formsubmit.co/ajax/${cfg.partialFillEmail}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+              body: JSON.stringify({
+                _subject: `${cfg.emailSubject} - ABANDONED at step 2 (${company || 'unknown'})`,
+                _template: 'table',
+                company: company || 'Not entered',
+                company_number: companyNumber || '',
+                amount: amount || '',
+                turnover: turnover || '',
+                finance_type: financeType || '',
+                contact_name: name || '',
+                email: email || '',
+                phone: phone || '',
+                applied_from: cfg.appliedFrom,
+                page_url: window.location.href,
+                note: '5 minutes on step 2 with no submit.',
+                ...attrBlob,
+              }),
+            }).catch(() => {});
+          } catch {}
+        }
       }, 300000);
     } else {
       clearTimeout(abandonTimer);
@@ -790,12 +1032,107 @@ const clientConfig = {
     margin: calc(-1 * var(--fc-sp-2)) 0 0;
   }
   .fc-leadform__ch-info[hidden] { display: none; }
-  .fc-leadform__postcode-fallback {
+
+  .fc-leadform__cant-find {
+    background: transparent; border: 0;
+    color: rgba(255, 255, 255, 0.65);
+    font-size: var(--fc-fs-xs);
+    text-decoration: underline;
+    cursor: pointer;
+    margin: calc(-1 * var(--fc-sp-2)) 0 0;
+    text-align: left;
+    padding: 0;
+  }
+  .fc-leadform__cant-find:hover { color: white; }
+  .fc-leadform__manual {
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: var(--fc-radius);
+    padding: var(--fc-sp-4);
     display: flex;
     flex-direction: column;
-    gap: var(--fc-sp-4);
+    gap: var(--fc-sp-3);
   }
-  .fc-leadform__postcode-fallback[hidden] { display: none; }
+  .fc-leadform__manual[hidden] { display: none; }
+  .fc-leadform__manual-info {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: var(--fc-fs-xs);
+    margin: 0;
+    line-height: var(--fc-leading-snug);
+  }
+  .fc-leadform__manual-back {
+    background: transparent; border: 0;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: var(--fc-fs-xs);
+    text-decoration: underline;
+    cursor: pointer; padding: 0;
+    text-align: left;
+  }
+  .fc-leadform__manual-back:hover { color: white; }
+
+  /* Tile grids — boxes for amount, turnover, finance-type */
+  .fc-leadform__tile-group {
+    border: 0; padding: 0; margin: 0;
+    display: flex; flex-direction: column;
+    gap: var(--fc-sp-2);
+  }
+  .fc-leadform__tiles {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--fc-sp-2);
+  }
+  @media (min-width: 480px) {
+    .fc-leadform__tiles { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (min-width: 768px) {
+    .fc-leadform__tiles { grid-template-columns: repeat(5, 1fr); }
+    .fc-leadform__tiles--wide { grid-template-columns: repeat(2, 1fr); }
+  }
+  .fc-leadform__tile {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: var(--fc-radius);
+    color: white;
+    padding: var(--fc-sp-3) var(--fc-sp-2);
+    font-family: var(--fc-font-body);
+    font-size: var(--fc-fs-sm);
+    cursor: pointer;
+    transition: all 150ms ease;
+    text-align: center;
+    display: flex; flex-direction: column;
+    gap: 2px;
+    min-height: 56px;
+    align-items: center; justify-content: center;
+  }
+  .fc-leadform__tile:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.32);
+  }
+  .fc-leadform__tile--selected {
+    background: var(--fc-accent, #ec4f31);
+    border-color: var(--fc-accent, #ec4f31);
+    color: white;
+    font-weight: 600;
+  }
+  .fc-leadform__tile-label { font-size: var(--fc-fs-sm); }
+  .fc-leadform__tile-desc {
+    font-size: var(--fc-fs-xs);
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 1px;
+  }
+  .fc-leadform__tile--selected .fc-leadform__tile-desc {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .fc-leadform__step2-recap {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: var(--fc-fs-xs);
+    margin: 0 0 var(--fc-sp-3);
+    padding: var(--fc-sp-2) var(--fc-sp-3);
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: var(--fc-radius);
+    text-align: center;
+  }
+
   .fc-leadform__error {
     font-size: var(--fc-fs-xs);
     color: #fca5a5;
