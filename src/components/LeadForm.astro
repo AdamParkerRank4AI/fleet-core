@@ -1,48 +1,40 @@
 ---
 /**
- * LeadForm — fleet-canonical lead capture form (v0.7.0 — company-first + tile UI + big tracking).
+ * LeadForm — fleet-canonical lead capture form (v0.8.0 — light card + chips + director + trading-time).
  *
- * Why this version:
- *   - v0.6.x put 3 dropdowns first (low typing friction) but step-2 dropoffs
- *     left us with demographic data and no way to identify the visitor. We
- *     now lead with Companies House autocomplete so even a step-1 abandon
- *     gives us a real UK business (name + number + postcode + status) we
- *     can search and follow up on.
- *   - Dropdowns replaced with tile grids (boxes) — better conversion on
- *     mobile, matches the kind of UI customers expect from modern UK
- *     business-finance broker funnels.
- *   - Industry removed entirely. UK lender appetite by sector is routed
- *     downstream from the broker panel, not by self-selection on the form.
- *   - Big-tracking blob added to every payload (lead, partial-fill, abandon):
- *       device, viewport, language, timezone, local_time, returning_visitor,
- *       visit_count, first_visit_at, last_visit_at, session_count,
- *       pages_this_session, page_load_at, time_to_first_interaction.
- *     Plus server-side enrichment (when /api/lead-enrich is mounted on the
- *     host site): ip, country, city, region, longitude, latitude, timezone,
- *     asn, asn_org, tls_version, bot_score.
+ * Why this version (vs v0.7.0):
+ *   - Visual: white card on cream surface (was dark navy), slim segmented
+ *     progress bar (was "Step 1 of 2" text), £-prefix input + chip presets
+ *     (was 5-tile band grids), pill chips for finance type (was tile grid),
+ *     inline email validation with green tick + disabled-state Continue.
+ *   - Functional: director field auto-loaded from Companies House officers
+ *     (with "type their name instead" fallback), trading-time pill selector,
+ *     progressive disclosure on turnover ("higher than this?" → reveals
+ *     monthly revenue field), bottom-pinned Back + Continue row.
  *
- * Two-step structure (visible to user):
- *   Step 1 — company (Companies House autocomplete) + 3 tile-grids
- *             (amount, monthly turnover, what for)
+ * Step structure (unchanged from v0.7):
+ *   Step 1 — company + director + trading time + amount + turnover + finance
  *   Step 2 — name + email + phone
  *
- * Partial-fill email fires immediately on company_selected (so Adam sees a
- * real UK business name + Companies House # within a second of selection,
- * even if the user doesn't progress further). Fires at most once per session.
+ * Partial-fill email, abandon timer, Supabase 3-tier write, attribution +
+ * big-tracking blob, server-side enrichment — all preserved from v0.7.0.
  *
- * Drop-off (5-min step-2 abandon) is preserved from v0.6.x; now carries the
- * full company + tracking blob, not just contact-name + email.
+ * Companies House endpoints required on host CF Pages:
+ *   /api/companies-house/search  — required for the autocomplete
+ *   /api/companies-house/officers — required for the director dropdown (new)
+ *   /api/lead-enrich              — optional, for server-side IP/geo/ASN
  *
- * Supabase writes use the 3-tier graceful-degrade pattern from v0.6.x
- * (full -> base -> safe) so column drift on Supabase can never silently
- * lose a lead. New tracking fields fall through to FormSubmit email when
- * they don't map to existing Supabase columns.
+ * BREAKING CHANGE vs v0.7: the form posts EXACT amount + turnover (numeric
+ * strings), not band labels. Brokers downstream get precise figures.
+ *
+ * Config shape: v0.7 `financeTypes`/`turnoverBands`/`amountBands` still
+ * accepted for back-compat, but new sites should use `financeChips`,
+ * `turnoverChips`, `amountChips`, `tradingChips` (numeric chip presets).
  */
 
-interface FinanceOption {
-  value: string;
+interface ChipOption {
+  value: string | number;
   label: string;
-  description?: string;
 }
 
 export interface LeadFormConfig {
@@ -50,33 +42,31 @@ export interface LeadFormConfig {
   partialFillEmail?: string;
   emailSubject?: string;
   supabase?: { url: string; anonKey: string; table: string };
-  /**
-   * Path to the same-origin Companies House search proxy.
-   * Default: `/api/companies-house/search`. Pass `null` to disable autocomplete.
-   */
+  /** Path to same-origin Companies House search proxy. Default: `/api/companies-house/search`. */
   companiesHouseProxyPath?: string | null;
-  /**
-   * Path to the same-origin server-side enrichment endpoint that returns
-   * Cloudflare-side metadata (ip, country, asn, tls, etc).
-   * Default: `/api/lead-enrich`. Pass `null` to disable enrichment.
-   */
+  /** Path to same-origin Companies House officers proxy. Default: `/api/companies-house/officers`. */
+  companiesHouseOfficersPath?: string | null;
+  /** Path to same-origin server-side enrichment endpoint. Default: `/api/lead-enrich`. */
   enrichPath?: string | null;
-  /** Legacy. Kept on the type for back-compat — we don't render industries any more. */
-  industries?: FinanceOption[];
-  /** Tile options for "what kind of finance" (plain-language labels). */
-  financeTypes: FinanceOption[];
-  /** Tile options for monthly turnover bands. */
-  turnoverBands: FinanceOption[];
-  /** Tile options for amount-to-borrow bands. */
-  amountBands?: FinanceOption[];
+
+  /** v0.8 chip presets — preferred shape. */
+  amountChips?: ChipOption[];
+  turnoverChips?: ChipOption[];
+  financeChips?: ChipOption[];
+  tradingChips?: ChipOption[];
+
+  /** v0.7 back-compat names — quietly mapped to chips at runtime. */
+  amountBands?: ChipOption[];
+  turnoverBands?: ChipOption[];
+  financeTypes?: ChipOption[];
+  industries?: ChipOption[]; // legacy, unused
+
   trustPills?: string[];
   successHTML?: string;
   privacyPath?: string;
   attributionKey?: string;
-  /**
-   * Copy shown under the "Can't find your company?" link when the manual path
-   * is opened. Use this to redirect sole traders on the limited-co-only sites.
-   */
+
+  /** Copy shown under the "Can't find your business?" link. */
   cantFindMessage?: string;
 }
 
@@ -86,22 +76,17 @@ interface Props {
   subheading?: string;
   brokerDisclosure?: string;
   appliedFrom?: string;
-  /** Pre-fill the finance-type tile — pass via URL param ?finance_type= */
   defaultFinanceType?: string;
-  /** Pre-fill the amount tile — pass via URL param ?amount= */
   defaultAmount?: string;
-  /** Pre-fill the turnover tile — pass via URL param ?turnover= */
   defaultTurnover?: string;
-  /** Legacy. Quietly accepted but no longer rendered. */
   defaultIndustry?: string;
-  /** The lender slug a sister-site review routed from. Stamped on the lead. */
   lenderContext?: string;
 }
 
 const {
   config,
-  heading = "Get matched with the right lender",
-  subheading = "Two minutes. No obligation. Soft search only.",
+  heading = "Check your funding options",
+  subheading,
   brokerDisclosure,
   appliedFrom,
   defaultFinanceType,
@@ -112,15 +97,30 @@ const {
 
 const resolvedAppliedFrom = appliedFrom || Astro.url.pathname;
 
-// Default amount bands if the host config didn't supply its own. Matches the
-// 5-band shape Adam asked for on 12 May 2026.
-const amountBands = config.amountBands || [
-  { value: "0-10k", label: "Up to £10k" },
-  { value: "10-25k", label: "£10k - 25k" },
-  { value: "25-50k", label: "£25k - 50k" },
-  { value: "50-100k", label: "£50k - 100k" },
-  { value: "100k-plus", label: "£100k +" },
+const DEFAULT_AMOUNT_CHIPS: ChipOption[] = [
+  { value: 25000,  label: "£25,000" },
+  { value: 50000,  label: "£50,000" },
+  { value: 100000, label: "£100,000" },
+  { value: 250000, label: "£250,000" },
 ];
+const DEFAULT_TURNOVER_CHIPS: ChipOption[] = [
+  { value: 5000,   label: "£5,000" },
+  { value: 25000,  label: "£25,000" },
+  { value: 50000,  label: "£50,000" },
+  { value: 100000, label: "£100,000" },
+];
+const DEFAULT_TRADING_CHIPS: ChipOption[] = [
+  { value: "under-6m", label: "Under 6 months" },
+  { value: "6-12m",    label: "6 to 12 months" },
+  { value: "1-2y",     label: "1 to 2 years" },
+  { value: "2-5y",     label: "2 to 5 years" },
+  { value: "5y-plus",  label: "5 years +" },
+];
+
+const amountChips    = config.amountChips    || config.amountBands    || DEFAULT_AMOUNT_CHIPS;
+const turnoverChips  = config.turnoverChips  || config.turnoverBands  || DEFAULT_TURNOVER_CHIPS;
+const financeChips   = config.financeChips   || config.financeTypes   || [];
+const tradingChips   = config.tradingChips   || DEFAULT_TRADING_CHIPS;
 
 const clientConfig = {
   submitEndpoint: config.submitEndpoint,
@@ -131,6 +131,10 @@ const clientConfig = {
     config.companiesHouseProxyPath === null
       ? null
       : config.companiesHouseProxyPath || "/api/companies-house/search",
+  companiesHouseOfficersPath:
+    config.companiesHouseOfficersPath === null
+      ? null
+      : config.companiesHouseOfficersPath || "/api/companies-house/officers",
   enrichPath:
     config.enrichPath === null
       ? null
@@ -142,21 +146,24 @@ const clientConfig = {
     "If your business isn't on Companies House (sole trader, partnership of 3 or fewer, or unincorporated) we'll route you to the right form on our broader network.",
   successHTML:
     config.successHTML ||
-    '<div class="text-center py-8"><h3 class="text-2xl font-bold mb-2">Thank you</h3><p style="color: rgba(255,255,255,0.7);">We\'ll be in touch within 24 hours.</p></div>',
+    '<div style="text-align:center; padding:3rem 1rem;"><h3 style="font-family: var(--fc-font-display, Georgia, serif); font-size: 1.6rem; font-weight: 800; margin: 0 0 0.6rem;">Thank you</h3><p style="color: var(--fc-text-muted, #4a5568); margin: 0;">We\'ll be in touch within 24 hours with matched UK lender options.</p></div>',
   privacyPath: config.privacyPath || "/privacy/",
 };
 ---
 
 <section class="fc-leadform" data-fc-leadform>
   <div class="fc-leadform__inner">
-    <h2 class="fc-leadform__heading">{heading}</h2>
+    <div class="fc-leadform__head">
+      <h2 class="fc-leadform__heading">{heading}</h2>
+    </div>
+
     {subheading && <p class="fc-leadform__sub">{subheading}</p>}
     {brokerDisclosure && <p class="fc-leadform__disclosure">{brokerDisclosure}</p>}
 
-    <div class="fc-leadform__progress" aria-live="polite">
-      <span>Step <span id="fc-step-num">1</span> of 2</span>
-      <span class="fc-leadform__progress-sep"> · </span>
-      <span>Takes 2 minutes</span>
+    {/* Segmented progress bar — 2 segments for the 2 steps */}
+    <div class="fc-leadform__progress" role="progressbar" aria-valuemin="0" aria-valuemax="2" aria-valuenow="1">
+      <span class="fc-leadform__progress-seg fc-leadform__progress-seg--active" data-seg="1"></span>
+      <span class="fc-leadform__progress-seg" data-seg="2"></span>
     </div>
 
     <form id="fc-lead-form" class="fc-leadform__form" novalidate>
@@ -164,117 +171,188 @@ const clientConfig = {
       <input type="hidden" name="applied_from_url" id="fc-applied-from-url" />
       {lenderContext && <input type="hidden" name="lender_context" value={lenderContext} />}
 
-      {/* Step 1 — value-capture step. Company first (so abandons still
-          give us a real UK business name + Companies House #), then 3
-          tile-grids (low cognitive load, mobile-first). */}
+      {/* STEP 1 */}
       <div id="fc-step-1" class="fc-leadform__step">
-        <label class="fc-leadform__label" for="fc-company">
-          Your business <span class="fc-leadform__required">*</span>
-        </label>
-        <div class="fc-leadform__company-wrap">
-          <input type="text" id="fc-company" name="company" required autocomplete="organization"
-            class="fc-leadform__input"
-            placeholder="Start typing your registered company name…" />
-          <div id="fc-ch-results" class="fc-leadform__ch-results" hidden></div>
-        </div>
-        <input type="hidden" id="fc-company-number" name="company_number" />
-        <input type="hidden" id="fc-company-status" name="company_status" />
-        <input type="hidden" id="fc-business-postcode" name="business_postcode" />
-        <p id="fc-ch-info" class="fc-leadform__ch-info" hidden></p>
-        <p id="fc-company-error" class="fc-leadform__error" hidden>Please enter your company name.</p>
 
-        <button type="button" id="fc-cant-find" class="fc-leadform__cant-find">
-          Can't find your business?
-        </button>
+        {/* Field: Company (Companies House autocomplete) */}
+        <div class="fc-leadform__field">
+          <label class="fc-leadform__label" for="fc-company">What's your business name? <span class="fc-leadform__required">*</span></label>
+          <p class="fc-leadform__helper">Start typing — we'll search Companies House.</p>
+          <div class="fc-leadform__autocomplete">
+            <input type="text" id="fc-company" name="company" required autocomplete="organization"
+              class="fc-leadform__input"
+              placeholder="Start typing your registered company name…" />
+            <div id="fc-ch-results" class="fc-leadform__autocomplete-results" hidden></div>
+          </div>
+          <input type="hidden" id="fc-company-number" name="company_number" />
+          <input type="hidden" id="fc-company-status" name="company_status" />
+          <input type="hidden" id="fc-business-postcode" name="business_postcode" />
+          <p id="fc-ch-info" class="fc-leadform__field-info" hidden></p>
+          <p id="fc-company-error" class="fc-leadform__error" hidden>Please pick your business from the list.</p>
 
-        {/* Manual / unregistered path. Hidden by default. Sites that
-            restrict to limited-cos can use cantFindMessage to redirect. */}
-        <div id="fc-manual-mode" class="fc-leadform__manual" hidden>
-          <p class="fc-leadform__manual-info">{clientConfig.cantFindMessage}</p>
-          <label class="fc-leadform__label" for="fc-business-postcode-visible">
-            Business postcode <span class="fc-leadform__required">*</span>
-          </label>
-          <input type="text" id="fc-business-postcode-visible" autocomplete="postal-code"
-            class="fc-leadform__input" placeholder="e.g. SW1A 1AA"
-            inputmode="text" maxlength="10" />
-          <p id="fc-business-postcode-visible-error" class="fc-leadform__error" hidden>Please enter a valid UK postcode.</p>
-          <button type="button" id="fc-back-to-autocomplete" class="fc-leadform__manual-back">
-            ← Try Companies House search again
+          <button type="button" id="fc-cant-find" class="fc-leadform__link-btn">
+            Can't find your business?
           </button>
+
+          {/* Manual path — hidden until "can't find" is clicked */}
+          <div id="fc-manual-mode" class="fc-leadform__manual" hidden>
+            <p class="fc-leadform__manual-info">{clientConfig.cantFindMessage}</p>
+            <label class="fc-leadform__label" for="fc-business-postcode-visible">
+              Business postcode <span class="fc-leadform__required">*</span>
+            </label>
+            <input type="text" id="fc-business-postcode-visible" autocomplete="postal-code"
+              class="fc-leadform__input" placeholder="e.g. SW1A 1AA"
+              inputmode="text" maxlength="10" />
+            <p id="fc-business-postcode-visible-error" class="fc-leadform__error" hidden>Please enter a valid UK postcode.</p>
+            <button type="button" id="fc-back-to-autocomplete" class="fc-leadform__link-btn">
+              ← Try Companies House search again
+            </button>
+          </div>
         </div>
 
-        {/* Tile grid — how much */}
-        <fieldset class="fc-leadform__tile-group">
-          <legend class="fc-leadform__label">
-            How much do you need? <span class="fc-leadform__required">*</span>
-          </legend>
-          <div class="fc-leadform__tiles" data-tile-name="amount">
-            {amountBands.map(b => (
-              <button type="button" class="fc-leadform__tile" data-value={b.value} data-default={defaultAmount === b.value ? "1" : "0"}>
-                <span class="fc-leadform__tile-label">{b.label}</span>
-                {b.description && <span class="fc-leadform__tile-desc">{b.description}</span>}
-              </button>
-            ))}
+        {/* Field: Director (auto-populated from CH officers after company selected) */}
+        <div id="fc-director-field" class="fc-leadform__field" hidden>
+          <label class="fc-leadform__label" for="fc-director">Select a director</label>
+          <p class="fc-leadform__helper">Required by lenders to confirm authority.</p>
+          <select id="fc-director" name="director" class="fc-leadform__input fc-leadform__select">
+            <option value="">Loading directors…</option>
+          </select>
+          <button type="button" id="fc-director-manual-toggle" class="fc-leadform__link-btn">
+            Director not in the list? Type their name instead.
+          </button>
+          <div id="fc-director-manual" hidden>
+            <input type="text" id="fc-director-manual-input" name="director_manual"
+              class="fc-leadform__input" placeholder="e.g. Jane Smith"
+              autocomplete="off" />
+            <button type="button" id="fc-director-back-to-list" class="fc-leadform__link-btn">
+              ← Back to director list
+            </button>
           </div>
-          <input type="hidden" id="fc-amount" name="amount" value={defaultAmount || ""} />
-          <p id="fc-amount-error" class="fc-leadform__error" hidden>Please pick an amount.</p>
-        </fieldset>
+        </div>
 
-        {/* Tile grid — monthly turnover */}
-        <fieldset class="fc-leadform__tile-group">
-          <legend class="fc-leadform__label">
-            Estimated monthly turnover <span class="fc-leadform__required">*</span>
-          </legend>
-          <div class="fc-leadform__tiles" data-tile-name="turnover">
-            {config.turnoverBands.map(b => (
-              <button type="button" class="fc-leadform__tile" data-value={b.value} data-default={defaultTurnover === b.value ? "1" : "0"}>
-                <span class="fc-leadform__tile-label">{b.label}</span>
-                {b.description && <span class="fc-leadform__tile-desc">{b.description}</span>}
-              </button>
+        {/* Field: Trading time */}
+        <div class="fc-leadform__field">
+          <label class="fc-leadform__label">How long have you been trading?</label>
+          <div class="fc-leadform__pills" data-pill-group="trading">
+            {tradingChips.map(c => (
+              <button type="button" class="fc-leadform__pill" data-value={c.value}>{c.label}</button>
             ))}
           </div>
-          <input type="hidden" id="fc-turnover" name="turnover" value={defaultTurnover || ""} />
-          <p id="fc-turnover-error" class="fc-leadform__error" hidden>Please pick a monthly turnover.</p>
-        </fieldset>
+          <input type="hidden" id="fc-trading" name="trading_time" />
+          <p id="fc-trading-error" class="fc-leadform__error" hidden>Please pick how long you've been trading.</p>
+        </div>
 
-        {/* Tile grid — what for (plain language) */}
-        <fieldset class="fc-leadform__tile-group">
-          <legend class="fc-leadform__label">
-            What's it for? <span class="fc-leadform__required">*</span>
-          </legend>
-          <div class="fc-leadform__tiles fc-leadform__tiles--wide" data-tile-name="finance">
-            {config.financeTypes.map(f => (
-              <button type="button" class="fc-leadform__tile" data-value={f.value} data-default={defaultFinanceType === f.value ? "1" : "0"}>
-                <span class="fc-leadform__tile-label">{f.label}</span>
-                {f.description && <span class="fc-leadform__tile-desc">{f.description}</span>}
-              </button>
+        {/* Field: Amount (£ input + chip presets) */}
+        <div class="fc-leadform__field">
+          <label class="fc-leadform__label" for="fc-amount">How much funding are you looking for?</label>
+          <div class="fc-leadform__currency-input">
+            <span class="fc-leadform__currency-prefix">£</span>
+            <input type="text" id="fc-amount" name="amount" inputmode="numeric"
+              class="fc-leadform__input fc-leadform__input--currency"
+              placeholder="50,000" value={defaultAmount || ""} />
+          </div>
+          <div class="fc-leadform__chips">
+            {amountChips.map(c => (
+              <button type="button" class="fc-leadform__chip" data-target="fc-amount" data-value={c.value}>{c.label}</button>
             ))}
           </div>
-          <input type="hidden" id="fc-finance-type" name="finance_type" value={defaultFinanceType || ""} />
+          <p class="fc-leadform__helper">You can also type a custom amount.</p>
+          <p id="fc-amount-error" class="fc-leadform__error" hidden>Please enter an amount.</p>
+        </div>
+
+        {/* Field: Monthly turnover (£ input + chips + progressive disclosure) */}
+        <div class="fc-leadform__field">
+          <label class="fc-leadform__label" for="fc-turnover">Estimated monthly turnover</label>
+          <p class="fc-leadform__helper">An estimate is fine.</p>
+          <div class="fc-leadform__currency-input">
+            <span class="fc-leadform__currency-prefix">£</span>
+            <input type="text" id="fc-turnover" name="turnover" inputmode="numeric"
+              class="fc-leadform__input fc-leadform__input--currency"
+              placeholder="50,000" value={defaultTurnover || ""} />
+          </div>
+          <div class="fc-leadform__chips">
+            {turnoverChips.map(c => (
+              <button type="button" class="fc-leadform__chip" data-target="fc-turnover" data-value={c.value}>{c.label}</button>
+            ))}
+          </div>
+
+          <div id="fc-turnover-followup" class="fc-leadform__followup" hidden>
+            <p class="fc-leadform__label fc-leadform__label--inline">Is your turnover currently higher than this?</p>
+            <div class="fc-leadform__radio-row">
+              <label class="fc-leadform__radio">
+                <input type="radio" name="turnover_higher" value="yes" /> Yes
+              </label>
+              <label class="fc-leadform__radio">
+                <input type="radio" name="turnover_higher" value="no" /> No
+              </label>
+            </div>
+            <div id="fc-monthly-revenue-field" class="fc-leadform__sub-field" hidden>
+              <label class="fc-leadform__label" for="fc-monthly-revenue">What's your current average monthly revenue?</label>
+              <div class="fc-leadform__currency-input">
+                <span class="fc-leadform__currency-prefix">£</span>
+                <input type="text" id="fc-monthly-revenue" name="monthly_revenue" inputmode="numeric"
+                  class="fc-leadform__input fc-leadform__input--currency"
+                  placeholder="200,000" />
+              </div>
+            </div>
+          </div>
+
+          <p id="fc-turnover-error" class="fc-leadform__error" hidden>Please enter monthly turnover.</p>
+        </div>
+
+        {/* Field: Finance type (horizontal pill chips) */}
+        <div class="fc-leadform__field">
+          <label class="fc-leadform__label">What's it for?</label>
+          <div class="fc-leadform__pills" data-pill-group="finance">
+            {financeChips.map(c => (
+              <button type="button" class="fc-leadform__pill" data-value={c.value} data-default={defaultFinanceType === String(c.value) ? "1" : "0"}>{c.label}</button>
+            ))}
+          </div>
+          <input type="hidden" id="fc-finance-type" name="finance_type" />
           <p id="fc-finance-type-error" class="fc-leadform__error" hidden>Please pick what the finance is for.</p>
-        </fieldset>
-
-        <button type="button" id="fc-next-step" class="fc-btn-primary fc-leadform__cta">Next →</button>
+        </div>
       </div>
 
-      {/* Step 2 — contact only. Identity commitment after company + tiles. */}
+      {/* STEP 2 */}
       <div id="fc-step-2" class="fc-leadform__step" hidden>
         <p class="fc-leadform__step2-recap" id="fc-step2-recap"></p>
 
-        <label class="fc-leadform__label" for="fc-name">Your name <span class="fc-leadform__required">*</span></label>
-        <input type="text" id="fc-name" name="name" required autocomplete="name" class="fc-leadform__input" placeholder="Full name" />
-        <p id="fc-name-error" class="fc-leadform__error" hidden>Please enter your full name.</p>
+        <div class="fc-leadform__field">
+          <label class="fc-leadform__label" for="fc-name">Your name <span class="fc-leadform__required">*</span></label>
+          <input type="text" id="fc-name" name="name" required autocomplete="name" class="fc-leadform__input" placeholder="Full name" />
+          <p id="fc-name-error" class="fc-leadform__error" hidden>Please enter your full name.</p>
+        </div>
 
-        <label class="fc-leadform__label" for="fc-email">Work email <span class="fc-leadform__required">*</span></label>
-        <input type="email" id="fc-email" name="email" required autocomplete="email" inputmode="email" class="fc-leadform__input" placeholder="you@company.co.uk" />
-        <p id="fc-email-error" class="fc-leadform__error" hidden>Please enter a valid email address.</p>
+        <div class="fc-leadform__field">
+          <label class="fc-leadform__label" for="fc-email">
+            Email address <span class="fc-leadform__required">*</span>
+            <span id="fc-email-check" class="fc-leadform__valid-check" hidden>✓</span>
+          </label>
+          <p class="fc-leadform__helper">No spam. Just your results.</p>
+          <input type="email" id="fc-email" name="email" required autocomplete="email" inputmode="email" class="fc-leadform__input" placeholder="you@company.co.uk" />
+          <p id="fc-email-error" class="fc-leadform__error" hidden>Please enter a valid email address.</p>
+        </div>
 
-        <label class="fc-leadform__label" for="fc-phone">Phone <span class="fc-leadform__required">*</span></label>
-        <input type="tel" id="fc-phone" name="phone" required autocomplete="tel" inputmode="tel" class="fc-leadform__input" placeholder="07xxx xxx xxx" />
-        <p id="fc-phone-error" class="fc-leadform__error" hidden>Please enter a valid UK phone number.</p>
+        <div class="fc-leadform__field">
+          <label class="fc-leadform__label" for="fc-phone">Phone number <span class="fc-leadform__required">*</span></label>
+          <p class="fc-leadform__helper">We'll only contact you about your funding options.</p>
+          <input type="tel" id="fc-phone" name="phone" required autocomplete="tel" inputmode="tel" class="fc-leadform__input" placeholder="07..." />
+          <p id="fc-phone-error" class="fc-leadform__error" hidden>Please enter a valid UK phone number.</p>
+        </div>
+      </div>
 
-        <button type="submit" class="fc-btn-primary fc-leadform__cta">See my matches →</button>
-        <button type="button" id="fc-prev-step" class="fc-leadform__back">← Back</button>
+      {/* Bottom nav row */}
+      <div class="fc-leadform__nav">
+        <button type="button" id="fc-prev-step" class="fc-leadform__back" hidden>
+          <span class="fc-leadform__back-arrow">←</span> Back
+        </button>
+        <span class="fc-leadform__nav-spacer"></span>
+        <button type="button" id="fc-next-step" class="fc-leadform__continue" disabled>
+          Continue <span class="fc-leadform__continue-arrow">→</span>
+        </button>
+        <button type="submit" id="fc-submit-step" class="fc-leadform__continue" hidden disabled>
+          Check my options <span class="fc-leadform__continue-arrow">→</span>
+        </button>
       </div>
     </form>
 
@@ -283,7 +361,7 @@ const clientConfig = {
     </p>
 
     {config.trustPills && config.trustPills.length > 0 && (
-      <div class="fc-leadform__pills">
+      <div class="fc-leadform__pills-trust">
         {config.trustPills.map((p, i) => (
           <span>{p}{i < config.trustPills!.length - 1 && <span class="fc-leadform__sep"> · </span>}</span>
         ))}
@@ -293,6 +371,8 @@ const clientConfig = {
 </section>
 
 <script define:vars={{ cfg: clientConfig }}>
+  const $ = (id) => document.getElementById(id);
+
   // --- Attribution (first-touch, sticky for the session) -------------------
   function getOrSetFirstTouch() {
     const KEY = cfg.attributionKey;
@@ -319,7 +399,6 @@ const clientConfig = {
     try { sessionStorage.setItem(KEY, JSON.stringify(ft)); } catch {}
     return ft;
   }
-
   function inferSource(ft) {
     if (ft.utm_source) return ft.utm_source;
     if (ft.gclid) return 'google-ads';
@@ -337,59 +416,45 @@ const clientConfig = {
     if (h.includes(window.location.hostname)) return 'internal';
     return 'referral-' + h;
   }
-
   const attribution = getOrSetFirstTouch();
 
-  // --- Big-tracking blob (client-side device, returning, visit count) -------
+  // --- Big-tracking blob ---------------------------------------------------
   const VISITS_KEY = cfg.attributionKey + '__visits';
-  function readVisits() {
-    try { return JSON.parse(localStorage.getItem(VISITS_KEY) || '{}'); } catch { return {}; }
-  }
-  function writeVisits(v) {
-    try { localStorage.setItem(VISITS_KEY, JSON.stringify(v)); } catch {}
-  }
+  function readVisits() { try { return JSON.parse(localStorage.getItem(VISITS_KEY) || '{}'); } catch { return {}; } }
+  function writeVisits(v) { try { localStorage.setItem(VISITS_KEY, JSON.stringify(v)); } catch {} }
   const visits = readVisits();
   const nowIso = new Date().toISOString();
   const prevLastVisit = visits.last_visit_at || null;
   const prevCount = Number(visits.visit_count || 0);
-  const newVisits = {
-    first_visit_at: visits.first_visit_at || nowIso,
-    last_visit_at: nowIso,
-    visit_count: prevCount + 1,
-  };
+  const newVisits = { first_visit_at: visits.first_visit_at || nowIso, last_visit_at: nowIso, visit_count: prevCount + 1 };
   writeVisits(newVisits);
   const isReturning = prevCount > 0;
 
   const SESSION_PAGES_KEY = cfg.attributionKey + '__session_pages';
   let pagesThisSession = [];
-  try {
-    pagesThisSession = JSON.parse(sessionStorage.getItem(SESSION_PAGES_KEY) || '[]');
-  } catch {}
+  try { pagesThisSession = JSON.parse(sessionStorage.getItem(SESSION_PAGES_KEY) || '[]'); } catch {}
   if (pagesThisSession[pagesThisSession.length - 1] !== window.location.pathname) {
     pagesThisSession.push(window.location.pathname);
     try { sessionStorage.setItem(SESSION_PAGES_KEY, JSON.stringify(pagesThisSession)); } catch {}
   }
 
   const ua = navigator.userAgent || '';
-  function detectDevice() {
-    if (/Mobi|Android|iPhone|iPad|iPod/i.test(ua)) return /iPad|Tablet/i.test(ua) ? 'tablet' : 'mobile';
-    return 'desktop';
-  }
-  function detectBrowser() {
+  const detectDevice = () => /Mobi|Android|iPhone|iPad|iPod/i.test(ua) ? (/iPad|Tablet/i.test(ua) ? 'tablet' : 'mobile') : 'desktop';
+  const detectBrowser = () => {
     if (/Edg\//.test(ua)) return 'edge';
     if (/Chrome\//.test(ua) && !/Edg\//.test(ua)) return 'chrome';
     if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) return 'safari';
     if (/Firefox\//.test(ua)) return 'firefox';
     return 'other';
-  }
-  function detectOs() {
+  };
+  const detectOs = () => {
     if (/Windows/i.test(ua)) return 'windows';
     if (/Mac OS X|Macintosh/i.test(ua)) return 'macos';
     if (/Android/i.test(ua)) return 'android';
     if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
     if (/Linux/i.test(ua)) return 'linux';
     return 'other';
-  }
+  };
   const clientBlob = {
     device_type: detectDevice(),
     browser: detectBrowser(),
@@ -411,9 +476,7 @@ const clientConfig = {
     page_load_at: nowIso,
   };
 
-  // --- Server-side enrichment (Cloudflare-side IP / geo / ASN) -------------
-  // Fired once on page-script-init, cached for the session. Falls back
-  // silently if the host site doesn't ship /api/lead-enrich.
+  // --- Server-side enrichment ---------------------------------------------
   let serverEnrich = null;
   const ENRICH_KEY = cfg.attributionKey + '__enrich';
   try {
@@ -430,17 +493,14 @@ const clientConfig = {
     } catch {}
   })();
 
-  // Page interaction timer — captures how long it took from page load to
-  // first form interaction (good signal of intent vs accidental click).
   const pageLoadAt = Date.now();
   let firstInteractionMs = null;
   const markInteraction = () => { if (firstInteractionMs === null) firstInteractionMs = Date.now() - pageLoadAt; };
 
-  // --- Applied-from URL hidden field ---------------------------------------
-  const appliedFromUrl = document.getElementById('fc-applied-from-url');
+  const appliedFromUrl = $('fc-applied-from-url');
   if (appliedFromUrl) appliedFromUrl.value = window.location.href;
 
-  // --- Common payload builder ----------------------------------------------
+  // --- Attribution payload builder ----------------------------------------
   function buildAttributionBlob() {
     return {
       lead_source: inferSource(attribution),
@@ -457,10 +517,8 @@ const clientConfig = {
       fbclid: attribution.fbclid || '',
       msclkid: attribution.msclkid || '',
       session_started_at: attribution.session_started_at || '',
-      // client blob
       ...clientBlob,
       time_to_first_interaction_ms: firstInteractionMs,
-      // server enrich (may be null if /api/lead-enrich isn't deployed yet)
       ip: serverEnrich?.ip || '',
       country: serverEnrich?.country || '',
       city: serverEnrich?.city || '',
@@ -475,16 +533,11 @@ const clientConfig = {
     };
   }
 
-  // --- Supabase writer (3-tier graceful-degrade) ---------------------------
+  // --- Supabase 3-tier writer (preserved from v0.7) -----------------------
   function logToSupabase(data) {
     if (!cfg.supabase) return;
     const attrBlob = buildAttributionBlob();
-    const basePayload = {
-      ...data,
-      page_url: window.location.href,
-      applied_from: cfg.appliedFrom,
-      user_agent: navigator.userAgent,
-    };
+    const basePayload = { ...data, page_url: window.location.href, applied_from: cfg.appliedFrom, user_agent: navigator.userAgent };
     const fullPayload = {
       ...basePayload,
       source: attrBlob.lead_source,
@@ -499,8 +552,6 @@ const clientConfig = {
       gclid: attrBlob.gclid,
       fbclid: attrBlob.fbclid,
       msclkid: attrBlob.msclkid,
-      // New enrichment fields (will fall through to safe-write if columns
-      // don't exist on the table yet).
       ip: attrBlob.ip,
       country: attrBlob.country,
       device_type: attrBlob.device_type,
@@ -511,16 +562,9 @@ const clientConfig = {
     const post = (body) =>
       fetch(`${cfg.supabase.url}/rest/v1/${cfg.supabase.table}`, {
         method: 'POST',
-        headers: {
-          'apikey': cfg.supabase.anonKey,
-          'Authorization': `Bearer ${cfg.supabase.anonKey}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal',
-        },
+        headers: { 'apikey': cfg.supabase.anonKey, 'Authorization': `Bearer ${cfg.supabase.anonKey}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
         body: JSON.stringify(body),
       });
-    // 3-tier write to survive schema drift. Closes the Amy-Knight class of
-    // bug (8 May 2026): missing column shouldn't lose the lead.
     const SAFE_COLUMNS = [
       'event_type', 'turnover', 'finance_type',
       'company_name', 'company_number', 'business_postcode',
@@ -534,31 +578,30 @@ const clientConfig = {
     SAFE_COLUMNS.forEach(k => { if (fullPayload[k] !== undefined) safePayload[k] = fullPayload[k]; });
     (async () => {
       try {
-        const r1 = await post(fullPayload);
-        if (r1.ok) return;
-        const r2 = await post(basePayload);
-        if (r2.ok) return;
-        const r3 = await post(safePayload);
-        if (r3.ok) return;
+        const r1 = await post(fullPayload); if (r1.ok) return;
+        const r2 = await post(basePayload); if (r2.ok) return;
+        const r3 = await post(safePayload); if (r3.ok) return;
         const err = await r3.text();
-        console.error('[fleet-core LeadForm] Supabase write failed all retries:', r3.status, err);
+        console.error('[fleet-core LeadForm v0.8] Supabase write failed all retries:', r3.status, err);
       } catch (e) {
-        console.error('[fleet-core LeadForm] Supabase write threw:', e);
+        console.error('[fleet-core LeadForm v0.8] Supabase write threw:', e);
       }
     })();
   }
 
-  // --- Partial-fill email (fires on company_selected, max once per session)
+  // --- Partial-fill email (fires on company_selected) ---------------------
   let partialEmailSent = false;
   function sendPartialFillEmail(extraNote) {
     if (partialEmailSent || !cfg.partialFillEmail) return;
     partialEmailSent = true;
     const attrBlob = buildAttributionBlob();
-    const company = document.getElementById('fc-company')?.value || '';
-    const companyNumber = document.getElementById('fc-company-number')?.value || '';
-    const amount = document.getElementById('fc-amount')?.value || '';
-    const turnover = document.getElementById('fc-turnover')?.value || '';
-    const financeType = document.getElementById('fc-finance-type')?.value || '';
+    const company = $('fc-company')?.value || '';
+    const companyNumber = $('fc-company-number')?.value || '';
+    const director = $('fc-director')?.value || $('fc-director-manual-input')?.value || '';
+    const trading = $('fc-trading')?.value || '';
+    const amount = $('fc-amount')?.value || '';
+    const turnover = $('fc-turnover')?.value || '';
+    const financeType = $('fc-finance-type')?.value || '';
     try {
       fetch(`https://formsubmit.co/ajax/${cfg.partialFillEmail}`, {
         method: 'POST',
@@ -568,6 +611,7 @@ const clientConfig = {
           _template: 'table',
           company: company || 'Not entered',
           company_number: companyNumber,
+          director, trading_time: trading,
           amount, turnover, finance_type: financeType,
           applied_from: cfg.appliedFrom,
           page_url: window.location.href,
@@ -578,249 +622,371 @@ const clientConfig = {
     } catch {}
   }
 
-  // --- gtag + custom-event hook --------------------------------------------
+  // --- gtag + custom-event hook -------------------------------------------
   function trackEvent(name, params) {
     if (typeof window.gtag === 'function') window.gtag('event', name, params || {});
     window.dispatchEvent(new CustomEvent('fc-leadform', { detail: { event: name, ...params } }));
   }
   trackEvent('form_view', { applied_from: cfg.appliedFrom });
 
-  // --- Inline-error helpers ------------------------------------------------
+  // --- Inline error helpers -----------------------------------------------
   function showError(fieldId) {
-    const err = document.getElementById(fieldId + '-error');
+    const err = $(fieldId + '-error');
     if (err) err.removeAttribute('hidden');
-    const input = document.getElementById(fieldId);
+    const input = $(fieldId);
     if (input) input.style.borderColor = '#fca5a5';
   }
   function clearError(fieldId) {
-    const err = document.getElementById(fieldId + '-error');
+    const err = $(fieldId + '-error');
     if (err) err.setAttribute('hidden', '');
-    const input = document.getElementById(fieldId);
+    const input = $(fieldId);
     if (input) input.style.borderColor = '';
   }
-  function setStep(n) {
-    const num = document.getElementById('fc-step-num');
-    if (num) num.textContent = String(n);
-  }
 
-  // --- Tile selection ------------------------------------------------------
-  function bindTileGroup(name, hiddenId) {
-    const group = document.querySelector(`[data-tile-name="${name}"]`);
-    if (!group) return;
-    const hidden = document.getElementById(hiddenId);
-    const tiles = group.querySelectorAll('.fc-leadform__tile');
-    // Apply default selection if set.
-    tiles.forEach(t => {
-      if (t.getAttribute('data-default') === '1') {
-        t.classList.add('fc-leadform__tile--selected');
-        if (hidden) hidden.value = t.getAttribute('data-value') || '';
-      }
+  // --- £ + chip-preset bindings -------------------------------------------
+  const formatGBP = (raw) => {
+    const num = String(raw).replace(/[^0-9]/g, '');
+    if (!num) return '';
+    return Number(num).toLocaleString('en-GB');
+  };
+  function bindCurrencyChipInput(inputId) {
+    const input = $(inputId);
+    if (!input) return;
+    if (input.value) input.value = formatGBP(input.value);
+    input.addEventListener('input', () => {
+      markInteraction();
+      input.value = formatGBP(input.value);
+      validateCurrentStep();
+      document.querySelectorAll(`[data-target="${inputId}"]`).forEach(c => c.classList.remove('fc-leadform__chip--selected'));
+      clearError(inputId);
     });
-    tiles.forEach(t => {
-      t.addEventListener('click', () => {
+    document.querySelectorAll(`[data-target="${inputId}"]`).forEach(chip => {
+      chip.addEventListener('click', () => {
         markInteraction();
-        tiles.forEach(o => o.classList.remove('fc-leadform__tile--selected'));
-        t.classList.add('fc-leadform__tile--selected');
-        if (hidden) hidden.value = t.getAttribute('data-value') || '';
-        clearError(hiddenId);
-        trackEvent('tile_selected', { group: name, value: hidden ? hidden.value : null });
+        const v = chip.getAttribute('data-value');
+        input.value = formatGBP(v);
+        document.querySelectorAll(`[data-target="${inputId}"]`).forEach(c => c.classList.remove('fc-leadform__chip--selected'));
+        chip.classList.add('fc-leadform__chip--selected');
+        clearError(inputId);
+        validateCurrentStep();
+        trackEvent('chip_selected', { input: inputId, value: v });
       });
     });
   }
-  bindTileGroup('amount', 'fc-amount');
-  bindTileGroup('turnover', 'fc-turnover');
-  bindTileGroup('finance', 'fc-finance-type');
+  bindCurrencyChipInput('fc-amount');
+  bindCurrencyChipInput('fc-turnover');
 
-  // --- Step-1 → step-2 transition ------------------------------------------
-  document.getElementById('fc-next-step')?.addEventListener('click', () => {
-    markInteraction();
-    const company = document.getElementById('fc-company')?.value;
-    const amount = document.getElementById('fc-amount')?.value;
-    const turnover = document.getElementById('fc-turnover')?.value;
-    const financeType = document.getElementById('fc-finance-type')?.value;
-
-    let hasError = false;
-    if (!company || company.length < 2) { showError('fc-company'); hasError = true; }
-    if (!amount) { showError('fc-amount'); hasError = true; }
-    if (!turnover) { showError('fc-turnover'); hasError = true; }
-    if (!financeType) { showError('fc-finance-type'); hasError = true; }
-    if (hasError) return;
-
-    // Step-2 recap so the user sees what they picked before adding contact.
-    const recap = document.getElementById('fc-step2-recap');
-    if (recap) {
-      recap.textContent = `Matching ${company} • ${amount} • ${turnover}/mo • ${financeType}`;
-    }
-
-    document.getElementById('fc-step-1').setAttribute('hidden', '');
-    document.getElementById('fc-step-2').removeAttribute('hidden');
-    setStep(2);
-    document.getElementById('fc-name')?.focus();
-
-    trackEvent('form_step_2', { company, amount, turnover, finance_type: financeType, applied_from: cfg.appliedFrom });
-    logToSupabase({
-      event_type: 'step_1_complete',
-      turnover, finance_type: financeType,
-      company_name: company,
-      company_number: document.getElementById('fc-company-number')?.value || null,
-      business_postcode: document.getElementById('fc-business-postcode')?.value || null,
+  // --- Pill group bindings (finance, trading) -----------------------------
+  function bindPillGroup(groupName, hiddenId) {
+    const group = document.querySelector(`[data-pill-group="${groupName}"]`);
+    if (!group) return;
+    const hidden = $(hiddenId);
+    const pills = group.querySelectorAll('.fc-leadform__pill');
+    pills.forEach(p => {
+      if (p.getAttribute('data-default') === '1') {
+        p.classList.add('fc-leadform__pill--selected');
+        if (hidden) hidden.value = p.getAttribute('data-value') || '';
+      }
+      p.addEventListener('click', () => {
+        markInteraction();
+        pills.forEach(o => o.classList.remove('fc-leadform__pill--selected'));
+        p.classList.add('fc-leadform__pill--selected');
+        if (hidden) hidden.value = p.getAttribute('data-value') || '';
+        clearError(hiddenId);
+        validateCurrentStep();
+        trackEvent('pill_selected', { group: groupName, value: hidden ? hidden.value : null });
+      });
     });
-    // Partial-fill email fires on step-1 complete (idempotent — same as company_selected).
-    sendPartialFillEmail('Step 1 complete, contact details not yet entered.');
+  }
+  bindPillGroup('finance', 'fc-finance-type');
+  bindPillGroup('trading', 'fc-trading');
+
+  // --- Progressive disclosure on turnover ---------------------------------
+  $('fc-turnover')?.addEventListener('blur', () => {
+    if (String($('fc-turnover').value).replace(/[^0-9]/g, '').length > 0) {
+      $('fc-turnover-followup')?.removeAttribute('hidden');
+    }
+  });
+  document.querySelectorAll('input[name="turnover_higher"]').forEach(r => {
+    r.addEventListener('change', (e) => {
+      if (e.target.value === 'yes') {
+        $('fc-monthly-revenue-field')?.removeAttribute('hidden');
+      } else {
+        $('fc-monthly-revenue-field')?.setAttribute('hidden', '');
+      }
+    });
+  });
+  $('fc-monthly-revenue')?.addEventListener('input', (e) => {
+    e.target.value = formatGBP(e.target.value);
   });
 
-  document.getElementById('fc-prev-step')?.addEventListener('click', () => {
-    document.getElementById('fc-step-2').setAttribute('hidden', '');
-    document.getElementById('fc-step-1').removeAttribute('hidden');
-    setStep(1);
-    trackEvent('form_step_back');
-  });
-
-  // --- "Can't find your business?" → manual mode ---------------------------
-  const manualMode = document.getElementById('fc-manual-mode');
-  const companyInputEl = document.getElementById('fc-company');
-  document.getElementById('fc-cant-find')?.addEventListener('click', () => {
-    if (manualMode) manualMode.removeAttribute('hidden');
-    document.getElementById('fc-cant-find').style.display = 'none';
-    if (companyInputEl) companyInputEl.placeholder = "Trading name (we won't validate this against Companies House)";
-    trackEvent('cant_find_company_opened');
-  });
-  document.getElementById('fc-back-to-autocomplete')?.addEventListener('click', () => {
-    if (manualMode) manualMode.setAttribute('hidden', '');
-    const cantFindBtn = document.getElementById('fc-cant-find');
-    if (cantFindBtn) cantFindBtn.style.display = '';
-    if (companyInputEl) companyInputEl.placeholder = "Start typing your registered company name…";
-    trackEvent('cant_find_company_back');
-  });
-  // Mirror the visible postcode input into the hidden field.
-  document.getElementById('fc-business-postcode-visible')?.addEventListener('input', (e) => {
-    clearError('fc-business-postcode-visible');
-    const hidden = document.getElementById('fc-business-postcode');
-    if (hidden) hidden.value = e.target.value;
-  });
-
-  // --- Field-level error-clearers ------------------------------------------
-  ['fc-company', 'fc-name', 'fc-email', 'fc-phone'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', () => { markInteraction(); clearError(id); });
-  });
-
-  // --- Companies House autocomplete ----------------------------------------
-  let chTimeout;
-  const companyInput = document.getElementById('fc-company');
-  const chResults = document.getElementById('fc-ch-results');
-  const chInfo = document.getElementById('fc-ch-info');
-
-  if (cfg.companiesHouseProxyPath) {
-    companyInput?.addEventListener('input', () => {
+  // --- Companies House autocomplete ---------------------------------------
+  let chTimer;
+  const companyInput = $('fc-company');
+  const manualMode = $('fc-manual-mode');
+  if (companyInput && cfg.companiesHouseProxyPath) {
+    companyInput.addEventListener('input', () => {
       markInteraction();
-      clearTimeout(chTimeout);
+      clearTimeout(chTimer);
+      clearError('fc-company');
       const q = companyInput.value.trim();
-      if (q.length < 3) { chResults?.setAttribute('hidden', ''); return; }
-      chTimeout = setTimeout(async () => {
+      if (q.length < 3) { $('fc-ch-results')?.setAttribute('hidden', ''); return; }
+      chTimer = setTimeout(async () => {
         try {
           const res = await fetch(`${cfg.companiesHouseProxyPath}?q=${encodeURIComponent(q)}`);
           if (!res.ok) return;
           const data = await res.json();
-          if (!data.items?.length) { chResults?.setAttribute('hidden', ''); return; }
-          const escapeAttr = (s) => String(s || '').replace(/"/g, '&quot;');
-          chResults.innerHTML = data.items.map(c => {
-            const postalCode = (c.address && c.address.postal_code) || '';
-            return `<div class="fc-leadform__ch-item" data-name="${escapeAttr(c.title)}" data-number="${escapeAttr(c.company_number)}" data-status="${escapeAttr(c.company_status)}" data-postcode="${escapeAttr(postalCode)}">
-              <div class="fc-leadform__ch-name">${c.title}</div>
-              <div class="fc-leadform__ch-meta">${c.company_number} · ${c.company_status} · ${c.address_snippet || ''}</div>
-            </div>`;
+          const items = (data.items || []).slice(0, 8);
+          const truncate = (s, n) => (s && s.length > n) ? s.slice(0, n - 1).replace(/[,\s]+$/, '') + '…' : (s || '');
+          const html = items.map(item => {
+            const status = (item.company_status || '').toLowerCase();
+            const statusClass = status === 'active' ? 'fc-leadform__ch-pill--active' : status === 'dissolved' ? 'fc-leadform__ch-pill--dissolved' : 'fc-leadform__ch-pill--other';
+            const addr = truncate(item.address_snippet || '', 64);
+            return `
+              <div class="fc-leadform__ch-item" tabindex="0"
+                data-name="${item.title || ''}"
+                data-number="${item.company_number || ''}"
+                data-status="${status}"
+                data-postcode="${(item.address && item.address.postal_code) || ''}">
+                <div class="fc-leadform__ch-row1">
+                  <span class="fc-leadform__ch-name">${item.title || ''}</span>
+                  ${status ? `<span class="fc-leadform__ch-pill ${statusClass}">${status}</span>` : ''}
+                </div>
+                <div class="fc-leadform__ch-row2">
+                  <span class="fc-leadform__ch-number">${item.company_number || ''}</span>${addr ? `<span class="fc-leadform__ch-dot"> · </span><span class="fc-leadform__ch-addr">${addr}</span>` : ''}
+                </div>
+              </div>`;
           }).join('');
-          chResults.removeAttribute('hidden');
-          chResults.querySelectorAll('.fc-leadform__ch-item').forEach(item => {
-            item.addEventListener('click', () => {
-              const name = item.getAttribute('data-name') || '';
-              const number = item.getAttribute('data-number') || '';
-              const status = item.getAttribute('data-status') || '';
-              const postcode = item.getAttribute('data-postcode') || '';
-              companyInput.value = name;
-              document.getElementById('fc-company-number').value = number;
-              document.getElementById('fc-company-status').value = status;
-              const postcodeInput = document.getElementById('fc-business-postcode');
-              if (postcodeInput) postcodeInput.value = postcode;
-              chResults.setAttribute('hidden', '');
-              chInfo.textContent = `✓ ${name} (${number}) — ${status}`;
-              chInfo.removeAttribute('hidden');
-              trackEvent('company_selected', { company_name: name, company_number: number, has_postcode: postcode ? 'yes' : 'no' });
-              logToSupabase({
-                event_type: 'company_selected',
-                company_name: name,
-                company_number: number,
-                business_postcode: postcode || null,
-              });
-              // The key drop-off-recovery move: fire partial-fill email the
-              // instant we know the business identity, before the user has
-              // any chance to bail.
-              sendPartialFillEmail('Company selected — earliest possible capture point.');
-            });
+          const box = $('fc-ch-results');
+          if (!box) return;
+          box.innerHTML = html;
+          box.removeAttribute('hidden');
+          box.querySelectorAll('.fc-leadform__ch-item').forEach(el => {
+            el.addEventListener('click', () => selectCompany(el));
+            el.addEventListener('keydown', (e) => { if (e.key === 'Enter') selectCompany(el); });
           });
         } catch {}
-      }, 300);
-    });
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('#fc-company, #fc-ch-results')) {
-        chResults?.setAttribute('hidden', '');
-      }
+      }, 250);
     });
   }
+  function selectCompany(el) {
+    const name = el.getAttribute('data-name');
+    const number = el.getAttribute('data-number');
+    const status = el.getAttribute('data-status');
+    const postcode = el.getAttribute('data-postcode');
+    companyInput.value = name;
+    $('fc-company-number').value = number;
+    $('fc-company-status').value = status;
+    $('fc-business-postcode').value = postcode;
+    $('fc-ch-info').textContent = `${name} · ${number}${postcode ? ' · ' + postcode : ''}`;
+    $('fc-ch-info').removeAttribute('hidden');
+    $('fc-ch-results').setAttribute('hidden', '');
+    clearError('fc-company');
+    loadDirectors(number);
+    sendPartialFillEmail(`Company selected: ${name} (${number}). Director auto-load in progress.`);
+    trackEvent('company_selected', { company: name, company_number: number });
+    validateCurrentStep();
+  }
 
-  // --- Email + phone soft validation ---------------------------------------
-  const emailInput = document.getElementById('fc-email');
-  const emailError = document.getElementById('fc-email-error');
-  emailInput?.addEventListener('blur', () => {
-    const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.value);
-    if (emailInput.value && !valid) emailError.removeAttribute('hidden');
-    else emailError.setAttribute('hidden', '');
+  // --- "Can't find your business?" → manual mode --------------------------
+  const cantFindBtn = $('fc-cant-find');
+  cantFindBtn?.addEventListener('click', () => {
+    if (!manualMode) return;
+    manualMode.removeAttribute('hidden');
+    cantFindBtn.style.display = 'none';
+    $('fc-ch-results')?.setAttribute('hidden', '');
+    $('fc-business-postcode-visible')?.focus();
+    trackEvent('manual_mode_opened');
   });
-  const phoneInput = document.getElementById('fc-phone');
-  const phoneError = document.getElementById('fc-phone-error');
-  phoneInput?.addEventListener('blur', () => {
-    const cleaned = phoneInput.value.replace(/[\s\(\)\-]/g, '');
-    const valid = /^(\+44|0)[1-9]\d{8,10}$/.test(cleaned);
-    if (phoneInput.value && !valid) phoneError.removeAttribute('hidden');
-    else phoneError.setAttribute('hidden', '');
+  $('fc-back-to-autocomplete')?.addEventListener('click', () => {
+    if (!manualMode) return;
+    manualMode.setAttribute('hidden', '');
+    if (cantFindBtn) cantFindBtn.style.display = '';
+    $('fc-business-postcode-visible').value = '';
+    companyInput?.focus();
+  });
+  $('fc-business-postcode-visible')?.addEventListener('input', validateCurrentStep);
+
+  // --- Companies House officers fetch (director dropdown) -----------------
+  async function loadDirectors(number) {
+    if (!cfg.companiesHouseOfficersPath) return;
+    const field = $('fc-director-field');
+    const select = $('fc-director');
+    const manualWrap = $('fc-director-manual');
+    const manualInput = $('fc-director-manual-input');
+    field?.removeAttribute('hidden');
+    manualWrap?.setAttribute('hidden', '');
+    if (manualInput) manualInput.value = '';
+    select?.removeAttribute('hidden');
+    if (select) {
+      select.innerHTML = '<option value="">Loading directors…</option>';
+      select.disabled = true;
+    }
+    try {
+      const res = await fetch(`${cfg.companiesHouseOfficersPath}?number=${encodeURIComponent(number)}`);
+      if (!res.ok) throw new Error('officers fetch failed');
+      const data = await res.json();
+      const officers = data.officers || [];
+      if (officers.length === 0) {
+        select?.setAttribute('hidden', '');
+        manualWrap?.removeAttribute('hidden');
+        manualInput?.focus();
+      } else if (select) {
+        select.innerHTML = '<option value="">Choose director…</option>' +
+          officers.map(o => `<option value="${o.name.replace(/"/g, '&quot;')}">${o.name}</option>`).join('');
+        select.disabled = false;
+      }
+    } catch {
+      select?.setAttribute('hidden', '');
+      manualWrap?.removeAttribute('hidden');
+    }
+    validateCurrentStep();
+  }
+  $('fc-director-manual-toggle')?.addEventListener('click', () => {
+    $('fc-director')?.setAttribute('hidden', '');
+    const s = $('fc-director'); if (s) s.value = '';
+    $('fc-director-manual')?.removeAttribute('hidden');
+    $('fc-director-manual-input')?.focus();
+    validateCurrentStep();
+  });
+  $('fc-director-back-to-list')?.addEventListener('click', () => {
+    $('fc-director-manual')?.setAttribute('hidden', '');
+    const m = $('fc-director-manual-input'); if (m) m.value = '';
+    $('fc-director')?.removeAttribute('hidden');
+    validateCurrentStep();
+  });
+  $('fc-director')?.addEventListener('change', validateCurrentStep);
+  $('fc-director-manual-input')?.addEventListener('input', validateCurrentStep);
+
+  // --- Inline email validation --------------------------------------------
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  $('fc-email')?.addEventListener('input', () => {
+    markInteraction();
+    const v = $('fc-email').value.trim();
+    const valid = EMAIL_RE.test(v);
+    const check = $('fc-email-check');
+    if (valid) check?.removeAttribute('hidden'); else check?.setAttribute('hidden', '');
+    if (valid) clearError('fc-email');
+    validateCurrentStep();
+  });
+  $('fc-phone')?.addEventListener('input', () => { markInteraction(); validateCurrentStep(); });
+  $('fc-name')?.addEventListener('input', () => { markInteraction(); validateCurrentStep(); });
+
+  // --- Step validation ----------------------------------------------------
+  let currentStep = 1;
+  function isStep1Valid() {
+    const companyNumber = $('fc-company-number')?.value;
+    const postcodeVisible = $('fc-business-postcode-visible')?.value?.trim();
+    const usingManual = !manualMode?.hasAttribute('hidden') && manualMode?.offsetParent !== null;
+    const companyOk = usingManual ? Boolean(postcodeVisible) : Boolean(companyNumber && companyInput?.value && companyInput.value.length >= 2);
+    // Director only required when shown (company picked from CH)
+    const directorFieldHidden = $('fc-director-field')?.hasAttribute('hidden');
+    const directorOk = directorFieldHidden ? true : Boolean($('fc-director')?.value || ($('fc-director-manual-input')?.value || '').trim().length >= 2);
+    return Boolean(
+      companyOk && directorOk &&
+      $('fc-trading')?.value &&
+      $('fc-amount')?.value &&
+      $('fc-turnover')?.value &&
+      $('fc-finance-type')?.value
+    );
+  }
+  function isStep2Valid() {
+    const name = $('fc-name')?.value?.trim() || '';
+    const email = $('fc-email')?.value?.trim() || '';
+    const phone = ($('fc-phone')?.value || '').replace(/[^0-9+]/g, '');
+    return Boolean(name.length >= 2 && EMAIL_RE.test(email) && phone.length >= 10);
+  }
+  function validateCurrentStep() {
+    if (currentStep === 1) {
+      const btn = $('fc-next-step'); if (btn) btn.disabled = !isStep1Valid();
+    } else {
+      const btn = $('fc-submit-step'); if (btn) btn.disabled = !isStep2Valid();
+    }
+  }
+
+  // --- Step 1 → 2 transition ----------------------------------------------
+  $('fc-next-step')?.addEventListener('click', () => {
+    markInteraction();
+    if (!isStep1Valid()) return;
+    // Update progress
+    const segs = document.querySelectorAll('.fc-leadform__progress-seg');
+    segs[0]?.classList.remove('fc-leadform__progress-seg--active');
+    segs[0]?.classList.add('fc-leadform__progress-seg--complete');
+    segs[1]?.classList.add('fc-leadform__progress-seg--active');
+
+    const company = companyInput?.value;
+    const director = $('fc-director')?.value || $('fc-director-manual-input')?.value || '';
+    const trading = document.querySelector('[data-pill-group="trading"] .fc-leadform__pill--selected')?.textContent || '';
+    const amount = $('fc-amount')?.value;
+    const turnover = $('fc-turnover')?.value;
+    const finance = document.querySelector('[data-pill-group="finance"] .fc-leadform__pill--selected')?.textContent || '';
+    const recap = $('fc-step2-recap');
+    if (recap) recap.textContent = `Matching ${company}${director ? ' · ' + director : ''} · ${trading} · £${amount} · £${turnover}/mo · ${finance}`;
+
+    $('fc-step-1').setAttribute('hidden', '');
+    $('fc-step-2').removeAttribute('hidden');
+    $('fc-next-step').setAttribute('hidden', '');
+    $('fc-submit-step').removeAttribute('hidden');
+    $('fc-prev-step').removeAttribute('hidden');
+    currentStep = 2;
+    validateCurrentStep();
+    $('fc-name')?.focus();
+
+    trackEvent('form_step_2', { company, director, trading_time: $('fc-trading')?.value, amount, turnover, finance_type: $('fc-finance-type')?.value, applied_from: cfg.appliedFrom });
+    logToSupabase({
+      event_type: 'step_1_complete',
+      turnover, finance_type: $('fc-finance-type')?.value,
+      company_name: company,
+      company_number: $('fc-company-number')?.value || null,
+      business_postcode: $('fc-business-postcode')?.value || null,
+    });
+    sendPartialFillEmail('Step 1 complete, contact details not yet entered.');
   });
 
-  // --- Submit --------------------------------------------------------------
-  const form = document.getElementById('fc-lead-form');
-  let abandonTimer;
+  $('fc-prev-step')?.addEventListener('click', () => {
+    const segs = document.querySelectorAll('.fc-leadform__progress-seg');
+    segs[0]?.classList.add('fc-leadform__progress-seg--active');
+    segs[0]?.classList.remove('fc-leadform__progress-seg--complete');
+    segs[1]?.classList.remove('fc-leadform__progress-seg--active');
+
+    $('fc-step-2').setAttribute('hidden', '');
+    $('fc-step-1').removeAttribute('hidden');
+    $('fc-submit-step').setAttribute('hidden', '');
+    $('fc-next-step').removeAttribute('hidden');
+    $('fc-prev-step').setAttribute('hidden', '');
+    currentStep = 1;
+    validateCurrentStep();
+    trackEvent('form_step_back');
+  });
+
+  // --- Submit handler -----------------------------------------------------
   const UK_POSTCODE_RE = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;
+  let abandonTimer;
 
-  form?.addEventListener('submit', async (e) => {
+  $('fc-lead-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-
-    let hasError = false;
-    const name = document.getElementById('fc-name').value;
-    if (!name || name.length < 2) { showError('fc-name'); hasError = true; }
-    const email = document.getElementById('fc-email').value;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showError('fc-email'); hasError = true; }
-    const phone = document.getElementById('fc-phone').value.replace(/[\s\(\)\-]/g, '');
-    if (!/^(\+44|0)[1-9]\d{8,10}$/.test(phone)) { showError('fc-phone'); hasError = true; }
-    if (hasError) return;
-
-    // Postcode discipline — should already be populated from CH autocomplete
-    // or the manual visible-input. If missing, prompt with the manual mode.
-    const postcodeHidden = document.getElementById('fc-business-postcode');
-    const postcodeVisible = document.getElementById('fc-business-postcode-visible');
-    const effective = (postcodeVisible?.value || postcodeHidden?.value || '').trim();
-    if (!effective) {
-      if (manualMode) manualMode.removeAttribute('hidden');
-      document.getElementById('fc-cant-find').style.display = 'none';
-      showError('fc-business-postcode-visible');
-      postcodeVisible?.focus();
+    if (!isStep2Valid()) {
+      if (!EMAIL_RE.test($('fc-email').value)) showError('fc-email');
+      const phone = ($('fc-phone').value || '').replace(/[^0-9+]/g, '');
+      if (phone.length < 10) showError('fc-phone');
+      const name = $('fc-name').value.trim();
+      if (name.length < 2) showError('fc-name');
       return;
-    } else if (!UK_POSTCODE_RE.test(effective)) {
-      if (manualMode) manualMode.removeAttribute('hidden');
-      document.getElementById('fc-cant-find').style.display = 'none';
-      showError('fc-business-postcode-visible');
-      postcodeVisible?.focus();
-      return;
-    } else if (postcodeHidden) {
-      postcodeHidden.value = effective;
+    }
+    const form = e.target;
+
+    // Postcode check — if using manual mode, validate the visible field
+    const postcodeHidden = $('fc-business-postcode');
+    const postcodeVisible = $('fc-business-postcode-visible');
+    const usingManual = !manualMode?.hasAttribute('hidden') && manualMode?.offsetParent !== null;
+    if (usingManual) {
+      const effective = (postcodeVisible?.value || '').trim();
+      if (!effective || !UK_POSTCODE_RE.test(effective)) {
+        showError('fc-business-postcode-visible');
+        postcodeVisible?.focus();
+        return;
+      }
+      if (postcodeHidden) postcodeHidden.value = effective;
     }
 
     const fd = new FormData(form);
@@ -828,15 +994,13 @@ const clientConfig = {
     data._subject = cfg.emailSubject;
     data._template = 'table';
     if (cfg.partialFillEmail) {
-      data._autoresponse = `Thanks. We've received your application and will route it to UK lenders most likely to approve based on your sector and ticket size. Expect to hear from a matched broker within 24 hours.\n\nIf you didn't submit this, ignore this email.`;
+      data._autoresponse = `Thanks. We've received your application and will route it to UK lenders most likely to approve based on your profile and ticket size. Expect to hear from a matched broker within 24 hours.\n\nIf you didn't submit this, ignore this email.`;
     }
     data.page_url = window.location.href;
-
-    // Big-tracking blob — every email path gets this now (lead, partial, abandon).
     Object.assign(data, buildAttributionBlob());
 
-    const submitBtn = form.querySelector('button[type="submit"]');
-    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Sending…'; }
+    const submitBtn = $('fc-submit-step');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = 'Sending…'; }
 
     try {
       const res = await fetch(cfg.submitEndpoint, {
@@ -846,13 +1010,7 @@ const clientConfig = {
       });
       const result = await res.json();
       if (result.success) {
-        trackEvent('form_submit_success', {
-          company: data.company,
-          amount: data.amount,
-          turnover: data.turnover,
-          finance_type: data.finance_type,
-          applied_from: cfg.appliedFrom,
-        });
+        trackEvent('form_submit_success', { company: data.company, amount: data.amount, turnover: data.turnover, finance_type: data.finance_type, applied_from: cfg.appliedFrom });
         clearTimeout(abandonTimer);
         logToSupabase({
           event_type: 'form_submit',
@@ -867,34 +1025,31 @@ const clientConfig = {
         });
         form.innerHTML = cfg.successHTML;
       } else {
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'See my matches →'; }
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Check my options <span class="fc-leadform__continue-arrow">→</span>'; }
         trackEvent('form_submit_error');
       }
     } catch {
-      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'See my matches →'; }
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Check my options <span class="fc-leadform__continue-arrow">→</span>'; }
       trackEvent('form_submit_error');
     }
   });
 
-  // --- 5-min step-2 abandon — fires email + Supabase row -------------------
+  // --- 5-min step-2 abandon -----------------------------------------------
   const observer = new MutationObserver(() => {
-    const step2 = document.getElementById('fc-step-2');
+    const step2 = $('fc-step-2');
     if (step2 && !step2.hasAttribute('hidden')) {
       abandonTimer = setTimeout(() => {
-        const company = document.getElementById('fc-company')?.value;
-        const companyNumber = document.getElementById('fc-company-number')?.value;
-        const name = document.getElementById('fc-name')?.value;
-        const email = document.getElementById('fc-email')?.value;
-        const phone = document.getElementById('fc-phone')?.value;
-        const amount = document.getElementById('fc-amount')?.value;
-        const turnover = document.getElementById('fc-turnover')?.value;
-        const financeType = document.getElementById('fc-finance-type')?.value;
-        trackEvent('form_abandon_step2', {
-          partial_data: (name || email) ? 'started' : 'none',
-          has_name: name ? 'yes' : 'no',
-          has_email: email ? 'yes' : 'no',
-          applied_from: cfg.appliedFrom,
-        });
+        const company = $('fc-company')?.value;
+        const companyNumber = $('fc-company-number')?.value;
+        const director = $('fc-director')?.value || $('fc-director-manual-input')?.value || '';
+        const trading = $('fc-trading')?.value;
+        const name = $('fc-name')?.value;
+        const email = $('fc-email')?.value;
+        const phone = $('fc-phone')?.value;
+        const amount = $('fc-amount')?.value;
+        const turnover = $('fc-turnover')?.value;
+        const financeType = $('fc-finance-type')?.value;
+        trackEvent('form_abandon_step2', { partial_data: (name || email) ? 'started' : 'none', has_name: name ? 'yes' : 'no', has_email: email ? 'yes' : 'no', applied_from: cfg.appliedFrom });
         logToSupabase({
           event_type: 'form_abandon',
           turnover: turnover || null,
@@ -905,7 +1060,6 @@ const clientConfig = {
           email: email || null,
           phone: phone || null,
         });
-        // Email Adam the abandon — full blob, so he can manually call.
         if (cfg.partialFillEmail) {
           const attrBlob = buildAttributionBlob();
           try {
@@ -917,6 +1071,8 @@ const clientConfig = {
                 _template: 'table',
                 company: company || 'Not entered',
                 company_number: companyNumber || '',
+                director,
+                trading_time: trading || '',
                 amount: amount || '',
                 turnover: turnover || '',
                 finance_type: financeType || '',
@@ -936,235 +1092,153 @@ const clientConfig = {
       clearTimeout(abandonTimer);
     }
   });
-  const step2El = document.getElementById('fc-step-2');
+  const step2El = $('fc-step-2');
   if (step2El) observer.observe(step2El, { attributes: true, attributeFilter: ['hidden'] });
+
+  // initial validate
+  validateCurrentStep();
 </script>
 
-<style>
+<style is:global>
+  /* CARD (light, on cream backdrop — host sets surrounding bg) */
   .fc-leadform {
-    background: var(--fc-text);
-    border-radius: var(--fc-radius-lg);
-    padding: var(--fc-sp-10) var(--fc-sp-6);
-    color: white;
+    background: white;
+    border-radius: 1rem;
+    box-shadow: 0 24px 60px -20px rgba(22, 40, 87, 0.18), 0 8px 16px -8px rgba(0, 0, 0, 0.05);
+    padding: 1.75rem 1.75rem 1.5rem;
+    max-width: 32rem;
+    margin: 0 auto;
+    width: 100%;
+    border: 1px solid rgba(22, 40, 87, 0.08);
+    color: var(--fc-text, #0f172a);
   }
-  @media (min-width: 768px) {
-    .fc-leadform { padding: var(--fc-sp-16) var(--fc-sp-12); }
-  }
-  .fc-leadform__inner { max-width: 32rem; margin: 0 auto; }
-  .fc-leadform__heading {
-    font-family: var(--fc-font-display);
-    font-size: var(--fc-fs-2xl);
-    font-weight: 700;
-    letter-spacing: -0.015em;
-    margin: 0 0 var(--fc-sp-2);
-    color: white;
-  }
-  @media (min-width: 768px) {
-    .fc-leadform__heading { font-size: var(--fc-fs-3xl); }
-  }
-  .fc-leadform__sub {
-    color: rgba(255, 255, 255, 0.7);
-    margin: 0 0 var(--fc-sp-3);
-    font-size: var(--fc-fs-sm);
-  }
-  .fc-leadform__disclosure {
-    color: rgba(255, 255, 255, 0.55);
-    margin: 0 0 var(--fc-sp-6);
-    font-size: var(--fc-fs-xs);
-    line-height: var(--fc-leading-snug);
-  }
-  .fc-leadform__progress {
-    display: flex;
-    align-items: center;
-    gap: var(--fc-sp-2);
-    color: rgba(255, 255, 255, 0.6);
-    font-size: var(--fc-fs-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-weight: 600;
-    margin-bottom: var(--fc-sp-4);
-  }
-  .fc-leadform__progress-sep { color: rgba(255, 255, 255, 0.3); }
+  @media (min-width: 640px) { .fc-leadform { padding: 2.25rem 2.25rem 1.75rem; } }
+  .fc-leadform__inner { display: flex; flex-direction: column; }
+
+  .fc-leadform__head { margin-bottom: 0.85rem; }
+  .fc-leadform__heading { font-family: var(--fc-font-display, Georgia, serif); font-size: 1.35rem; font-weight: 800; color: var(--fc-text, #0f172a); margin: 0; letter-spacing: -0.015em; line-height: 1.2; }
+  .fc-leadform__sub { color: var(--fc-text-muted, #6b7280); margin: 0 0 0.5rem; font-size: 0.9rem; }
+  .fc-leadform__disclosure { color: var(--fc-text-muted, #6b7280); margin: 0 0 0.85rem; font-size: 0.75rem; line-height: 1.4; }
+
+  /* Segmented progress bar */
+  .fc-leadform__progress { display: flex; gap: 0.4rem; margin-bottom: 1.5rem; }
+  .fc-leadform__progress-seg { flex: 1; height: 6px; background: #e5e7eb; border-radius: 999px; transition: background 200ms; }
+  .fc-leadform__progress-seg--active { background: var(--fc-accent, #d4a017); }
+  .fc-leadform__progress-seg--complete { background: var(--fc-text, #162857); }
+
   .fc-leadform__form { display: flex; flex-direction: column; }
-  .fc-leadform__step { display: flex; flex-direction: column; gap: var(--fc-sp-4); }
+  .fc-leadform__step { display: flex; flex-direction: column; gap: 1.5rem; }
   .fc-leadform__step[hidden] { display: none; }
-  .fc-leadform__label {
-    font-size: var(--fc-fs-sm);
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.95);
-    margin-bottom: calc(-1 * var(--fc-sp-3));
-  }
-  .fc-leadform__required { color: #fca5a5; }
-  .fc-leadform__input {
-    width: 100%;
-    padding: var(--fc-sp-3) var(--fc-sp-4);
-    border-radius: var(--fc-radius);
-    background: white;
-    color: var(--fc-text);
-    font-family: var(--fc-font-body);
-    font-size: var(--fc-fs-base);
-    border: 1px solid transparent;
-  }
-  .fc-leadform__input:focus { outline: 2px solid var(--fc-accent); outline-offset: 2px; }
-  .fc-leadform__company-wrap { position: relative; }
-  .fc-leadform__ch-results {
-    position: absolute; top: 100%; left: 0; right: 0;
-    background: white;
-    border: 1px solid var(--fc-border);
-    border-radius: var(--fc-radius);
-    margin-top: var(--fc-sp-1);
-    max-height: 12rem; overflow-y: auto; z-index: 10;
-    box-shadow: var(--fc-shadow-lg);
-  }
-  .fc-leadform__ch-results[hidden] { display: none; }
-  .fc-leadform__ch-item {
-    padding: var(--fc-sp-3) var(--fc-sp-4);
-    border-bottom: 1px solid var(--fc-border);
-    cursor: pointer; color: var(--fc-text);
-  }
-  .fc-leadform__ch-item:hover { background: var(--fc-bg-muted); }
+
+  .fc-leadform__field { display: flex; flex-direction: column; }
+  .fc-leadform__label { font-size: 0.95rem; font-weight: 700; color: var(--fc-text, #162857); margin: 0 0 0.3rem; display: flex; align-items: center; gap: 0.5rem; letter-spacing: -0.005em; }
+  .fc-leadform__label--inline { font-size: 0.88rem; font-weight: 600; margin: 0.85rem 0 0.5rem; }
+  .fc-leadform__required { color: #dc2626; font-weight: 800; }
+  .fc-leadform__helper { font-size: 0.8rem; color: var(--fc-text-muted, #6b7280); margin: 0 0 0.6rem; line-height: 1.4; }
+  .fc-leadform__field-info { font-size: 0.78rem; color: var(--fc-text, #162857); margin: 0.5rem 0 0; font-weight: 600; }
+
+  /* Inputs */
+  .fc-leadform__input { width: 100%; padding: 0.85rem 0.95rem; border: 1.5px solid #cbd5e1; border-radius: 0.55rem; background: white; color: var(--fc-text, #162857); font-family: inherit; font-size: 1rem; transition: border-color 150ms, box-shadow 150ms; }
+  .fc-leadform__input:focus { outline: none; border-color: var(--fc-text, #162857); box-shadow: 0 0 0 3px rgba(22, 40, 87, 0.1); }
+  .fc-leadform__input::placeholder { color: #94a3b8; }
+
+  /* £ currency input */
+  .fc-leadform__currency-input { display: flex; align-items: center; border: 1.5px solid #cbd5e1; border-radius: 0.55rem; background: white; transition: border-color 150ms, box-shadow 150ms; overflow: hidden; }
+  .fc-leadform__currency-input:focus-within { border-color: var(--fc-text, #162857); box-shadow: 0 0 0 3px rgba(22, 40, 87, 0.1); }
+  .fc-leadform__currency-prefix { padding: 0 0.8rem 0 1rem; color: var(--fc-text, #162857); font-weight: 700; font-size: 1.05rem; }
+  .fc-leadform__input--currency { border: 0; border-radius: 0; padding: 0.85rem 0.95rem 0.85rem 0; flex: 1; }
+  .fc-leadform__input--currency:focus { box-shadow: none; }
+
+  /* Chips */
+  .fc-leadform__chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+  .fc-leadform__chip { background: white; border: 1.5px solid #cbd5e1; color: var(--fc-text, #162857); border-radius: 0.55rem; padding: 0.55rem 0.95rem; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: all 150ms; }
+  .fc-leadform__chip:hover { border-color: var(--fc-text, #162857); background: #f8fafc; }
+  .fc-leadform__chip--selected { background: var(--fc-text, #162857); border-color: var(--fc-text, #162857); color: white; }
+
+  /* Pills */
+  .fc-leadform__pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .fc-leadform__pill { background: white; border: 1.5px solid #cbd5e1; color: var(--fc-text, #162857); border-radius: 999px; padding: 0.55rem 1rem; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: all 150ms; }
+  .fc-leadform__pill:hover { border-color: var(--fc-text, #162857); background: #f8fafc; }
+  .fc-leadform__pill--selected { background: var(--fc-text, #162857); border-color: var(--fc-text, #162857); color: white; }
+
+  /* Radio + progressive disclosure */
+  .fc-leadform__radio-row { display: flex; gap: 1.5rem; margin-bottom: 0.5rem; }
+  .fc-leadform__radio { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.92rem; color: var(--fc-text, #162857); font-weight: 500; }
+  .fc-leadform__radio input { width: 1.1rem; height: 1.1rem; accent-color: var(--fc-text, #162857); }
+  .fc-leadform__sub-field { margin-top: 0.85rem; }
+  .fc-leadform__sub-field[hidden] { display: none; }
+  .fc-leadform__followup { padding: 0.75rem 0 0; border-top: 1px dashed #e5e7eb; margin-top: 1rem; }
+  .fc-leadform__followup[hidden] { display: none; }
+
+  /* Companies House autocomplete */
+  .fc-leadform__autocomplete { position: relative; }
+  .fc-leadform__autocomplete-results { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #cbd5e1; border-radius: 0.55rem; margin-top: 0.25rem; max-height: 22rem; overflow-y: auto; z-index: 20; box-shadow: 0 12px 24px -8px rgba(22, 40, 87, 0.15); }
+  .fc-leadform__autocomplete-results[hidden] { display: none; }
+  .fc-leadform__ch-item { padding: 0.7rem 1rem; cursor: pointer; border-bottom: 1px solid #f1f5f9; transition: background 120ms; }
+  .fc-leadform__ch-item:hover, .fc-leadform__ch-item:focus { background: #f8fafc; outline: none; }
   .fc-leadform__ch-item:last-child { border-bottom: 0; }
-  .fc-leadform__ch-name { font-size: var(--fc-fs-sm); font-weight: 500; color: var(--fc-text); }
-  .fc-leadform__ch-meta { font-size: var(--fc-fs-xs); color: var(--fc-text-subtle); }
-  .fc-leadform__ch-info {
-    font-size: var(--fc-fs-xs);
-    color: rgba(255, 255, 255, 0.7);
-    margin: calc(-1 * var(--fc-sp-2)) 0 0;
-  }
-  .fc-leadform__ch-info[hidden] { display: none; }
+  .fc-leadform__ch-row1 { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+  .fc-leadform__ch-name { font-weight: 700; font-size: 0.93rem; color: var(--fc-text, #162857); line-height: 1.25; flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fc-leadform__ch-pill { flex-shrink: 0; font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.2rem 0.5rem; border-radius: 999px; line-height: 1; }
+  .fc-leadform__ch-pill--active { background: #dcfce7; color: #15803d; }
+  .fc-leadform__ch-pill--dissolved { background: #fee2e2; color: #b91c1c; }
+  .fc-leadform__ch-pill--other { background: #ffedd5; color: #c2410c; }
+  .fc-leadform__ch-row2 { margin-top: 0.25rem; font-size: 0.78rem; color: #64748b; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fc-leadform__ch-number { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; color: #475569; font-weight: 600; }
+  .fc-leadform__ch-dot { color: #cbd5e1; }
+  .fc-leadform__ch-addr { color: #64748b; }
 
-  .fc-leadform__cant-find {
-    background: transparent; border: 0;
-    color: rgba(255, 255, 255, 0.65);
-    font-size: var(--fc-fs-xs);
-    text-decoration: underline;
-    cursor: pointer;
-    margin: calc(-1 * var(--fc-sp-2)) 0 0;
-    text-align: left;
-    padding: 0;
+  /* Director select */
+  .fc-leadform__select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-color: white;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23162857' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.85rem center;
+    background-size: 1.1rem;
+    padding-right: 2.5rem;
   }
-  .fc-leadform__cant-find:hover { color: white; }
-  .fc-leadform__manual {
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: var(--fc-radius);
-    padding: var(--fc-sp-4);
-    display: flex;
-    flex-direction: column;
-    gap: var(--fc-sp-3);
-  }
+  .fc-leadform__select[hidden] { display: none; }
+  .fc-leadform__select:disabled { opacity: 0.6; cursor: wait; }
+
+  /* Link-style buttons */
+  .fc-leadform__link-btn { background: transparent; border: 0; color: var(--fc-text, #162857); font-size: 0.82rem; font-weight: 600; text-decoration: underline; text-decoration-color: rgba(22, 40, 87, 0.4); text-underline-offset: 3px; cursor: pointer; padding: 0.5rem 0; text-align: left; align-self: flex-start; }
+  .fc-leadform__link-btn:hover { color: var(--fc-accent, #d4a017); text-decoration-color: var(--fc-accent, #d4a017); }
+
+  /* Manual mode */
+  .fc-leadform__manual { background: #f8fafc; border-radius: 0.55rem; padding: 1rem; display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.5rem; border: 1px solid #e2e8f0; }
   .fc-leadform__manual[hidden] { display: none; }
-  .fc-leadform__manual-info {
-    color: rgba(255, 255, 255, 0.75);
-    font-size: var(--fc-fs-xs);
-    margin: 0;
-    line-height: var(--fc-leading-snug);
-  }
-  .fc-leadform__manual-back {
-    background: transparent; border: 0;
-    color: rgba(255, 255, 255, 0.55);
-    font-size: var(--fc-fs-xs);
-    text-decoration: underline;
-    cursor: pointer; padding: 0;
-    text-align: left;
-  }
-  .fc-leadform__manual-back:hover { color: white; }
+  .fc-leadform__manual-info { color: var(--fc-text-muted, #6b7280); font-size: 0.82rem; margin: 0; line-height: 1.45; }
 
-  /* Tile grids — boxes for amount, turnover, finance-type */
-  .fc-leadform__tile-group {
-    border: 0; padding: 0; margin: 0;
-    display: flex; flex-direction: column;
-    gap: var(--fc-sp-2);
-  }
-  .fc-leadform__tiles {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--fc-sp-2);
-  }
-  @media (min-width: 480px) {
-    .fc-leadform__tiles { grid-template-columns: repeat(3, 1fr); }
-  }
-  @media (min-width: 768px) {
-    .fc-leadform__tiles { grid-template-columns: repeat(5, 1fr); }
-    .fc-leadform__tiles--wide { grid-template-columns: repeat(2, 1fr); }
-  }
-  .fc-leadform__tile {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: var(--fc-radius);
-    color: white;
-    padding: var(--fc-sp-3) var(--fc-sp-2);
-    font-family: var(--fc-font-body);
-    font-size: var(--fc-fs-sm);
-    cursor: pointer;
-    transition: all 150ms ease;
-    text-align: center;
-    display: flex; flex-direction: column;
-    gap: 2px;
-    min-height: 56px;
-    align-items: center; justify-content: center;
-  }
-  .fc-leadform__tile:hover {
-    background: rgba(255, 255, 255, 0.14);
-    border-color: rgba(255, 255, 255, 0.32);
-  }
-  .fc-leadform__tile--selected {
-    background: var(--fc-accent, #ec4f31);
-    border-color: var(--fc-accent, #ec4f31);
-    color: white;
-    font-weight: 600;
-  }
-  .fc-leadform__tile-label { font-size: var(--fc-fs-sm); }
-  .fc-leadform__tile-desc {
-    font-size: var(--fc-fs-xs);
-    color: rgba(255, 255, 255, 0.6);
-    margin-top: 1px;
-  }
-  .fc-leadform__tile--selected .fc-leadform__tile-desc {
-    color: rgba(255, 255, 255, 0.85);
-  }
+  /* Validation tick */
+  .fc-leadform__valid-check { color: #16a34a; font-weight: 800; font-size: 1rem; }
+  .fc-leadform__valid-check[hidden] { display: none; }
 
-  .fc-leadform__step2-recap {
-    color: rgba(255, 255, 255, 0.7);
-    font-size: var(--fc-fs-xs);
-    margin: 0 0 var(--fc-sp-3);
-    padding: var(--fc-sp-2) var(--fc-sp-3);
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: var(--fc-radius);
-    text-align: center;
-  }
-
-  .fc-leadform__error {
-    font-size: var(--fc-fs-xs);
-    color: #fca5a5;
-    margin: calc(-1 * var(--fc-sp-2)) 0 0;
-  }
+  /* Errors */
+  .fc-leadform__error { color: #dc2626; font-size: 0.8rem; margin: 0.4rem 0 0; }
   .fc-leadform__error[hidden] { display: none; }
-  .fc-leadform__cta {
-    width: 100%;
-    margin-top: var(--fc-sp-2);
-    padding: var(--fc-sp-3) var(--fc-sp-6);
-    font-size: var(--fc-fs-base);
-  }
-  .fc-leadform__back {
-    background: transparent; border: 0;
-    color: rgba(255, 255, 255, 0.6);
-    font-size: var(--fc-fs-sm);
-    cursor: pointer;
-    margin-top: var(--fc-sp-2);
-  }
-  .fc-leadform__back:hover { color: white; }
-  .fc-leadform__privacy {
-    text-align: center;
-    color: rgba(255, 255, 255, 0.6);
-    font-size: var(--fc-fs-xs);
-    margin: var(--fc-sp-4) 0 0;
-  }
-  .fc-leadform__privacy a { color: rgba(255, 255, 255, 0.85); text-decoration: underline; }
-  .fc-leadform__pills {
-    margin-top: var(--fc-sp-6);
-    text-align: center;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: var(--fc-fs-xs);
-  }
-  .fc-leadform__sep { color: rgba(255, 255, 255, 0.3); margin: 0 var(--fc-sp-2); }
+
+  /* Step 2 recap */
+  .fc-leadform__step2-recap { background: #f8fafc; border-radius: 0.5rem; padding: 0.75rem 1rem; font-size: 0.85rem; color: var(--fc-text-muted, #4a5568); margin: 0 0 1rem; }
+
+  /* Bottom nav row */
+  .fc-leadform__nav { display: flex; align-items: center; gap: 0.75rem; margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid #e5e7eb; }
+  .fc-leadform__nav-spacer { flex: 1; }
+  .fc-leadform__back { background: transparent; border: 0; color: var(--fc-text-muted, #64748b); font-size: 0.95rem; font-weight: 600; cursor: pointer; padding: 0.55rem 1rem; display: inline-flex; align-items: center; gap: 0.4rem; }
+  .fc-leadform__back:hover { color: var(--fc-text, #162857); }
+  .fc-leadform__back[hidden] { display: none; }
+  .fc-leadform__back-arrow { font-size: 1.1rem; line-height: 1; }
+  .fc-leadform__continue { background: var(--fc-text, #162857); border: 0; color: white; border-radius: 0.55rem; padding: 0.85rem 1.5rem; font-size: 0.95rem; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem; transition: opacity 150ms, transform 100ms; box-shadow: 0 4px 12px -4px rgba(22, 40, 87, 0.4); }
+  .fc-leadform__continue:hover:not(:disabled) { transform: translateY(-1px); }
+  .fc-leadform__continue:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+  .fc-leadform__continue[hidden] { display: none; }
+  .fc-leadform__continue-arrow { transition: transform 150ms; }
+  .fc-leadform__continue:hover:not(:disabled) .fc-leadform__continue-arrow { transform: translateX(2px); }
+
+  /* Privacy + trust */
+  .fc-leadform__privacy { font-size: 0.74rem; color: var(--fc-text-muted, #6b7280); margin: 1rem 0 0; text-align: center; }
+  .fc-leadform__privacy a { color: var(--fc-text, #162857); text-decoration: underline; }
+  .fc-leadform__pills-trust { font-size: 0.78rem; color: var(--fc-text-muted, #6b7280); margin: 0.75rem 0 0; text-align: center; }
+  .fc-leadform__sep { color: #cbd5e1; }
 </style>
